@@ -1,0 +1,90 @@
+/* Tasks view: routine checklist, scheduling, photos, "couldn't do it". Overrides views.css where needed. */
+
+.tasks-head { gap: 8px; flex-wrap: wrap; }
+
+/* ---------- task card: content left, fixed action column right ---------- */
+.card.task {
+  display: grid; grid-template-columns: minmax(0, 1fr) 84px; align-items: start; gap: 12px; padding: 12px 10px 12px 12px;
+}
+.card.task .body { min-inline-size: 0; }
+.task-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; inline-size: 84px; grid-column: 2; }
+.task-actions .done-btn { inline-size: 100%; min-inline-size: 0; }
+.cant-btn {
+  min-block-size: 40px; padding: 4px 2px; border-radius: var(--radius-sm); border: 1.5px dashed var(--chalk-pink);
+  color: var(--chalk-pink); font: 700 15px/1.1 var(--font-body);
+}
+.cant-btn:active { background: rgba(244, 166, 184, .15); }
+.card.task.is-blocked { border-color: var(--chalk-pink); }
+.chip.recur { color: var(--chalk-blue); border-color: var(--chalk-blue); }
+.recur-ico { font: 700 17px/1 var(--font-hand); }
+
+.blocked-banner {
+  display: flex; align-items: center; gap: 10px; margin-block-start: 10px; padding: 6px 10px;
+  border: 2px dashed var(--chalk-pink); border-radius: var(--radius-sm); color: var(--chalk-pink);
+  font: 700 20px/1.2 var(--font-hand); overflow-wrap: anywhere;
+}
+.blocked-banner .grow { flex: 1; min-inline-size: 0; }
+.blocked-banner .btn { flex-shrink: 0; color: var(--chalk); }
+
+/* ---------- today's routine ---------- */
+.routine {
+  display: flex; flex-direction: column; gap: 4px; padding: 6px 12px 10px; border: 2px dashed var(--chalk-line);
+  border-radius: var(--radius);
+}
+.routine > .section-h { margin: 4px 0 2px; color: var(--chalk-yellow); }
+.routine-slot { margin: 8px 0 0; font-size: 21px; color: var(--chalk-blue); }
+.routine-row { display: flex; align-items: center; gap: 10px; padding-block: 4px; border-block-end: 1.5px dashed rgba(244, 241, 232, .16); }
+.routine-row:last-child { border-block-end: 0; }
+.routine-row .grow { flex: 1; min-inline-size: 0; }
+.r-title { font: 700 24px/1.1 var(--font-hand); overflow-wrap: anywhere; }
+.r-sub { display: flex; flex-wrap: wrap; gap: 8px; font-size: 14px; color: var(--chalk-dim); }
+.r-sub:empty { display: none; }
+.routine-row.is-done .r-title { text-decoration: line-through; text-decoration-thickness: 2px; color: var(--chalk-dim); }
+.check.big { flex: 0 0 56px; inline-size: 56px; block-size: 56px; font-size: 40px; }
+.check.big::before { inset: 6px; border-width: 3px; }
+.check:disabled { opacity: .45; cursor: default; }
+
+/* ---------- upcoming ---------- */
+.upcoming-toggle {
+  align-self: flex-start; min-block-size: 44px; padding-inline: 4px; font: 700 23px/1 var(--font-hand); color: var(--chalk-blue);
+}
+.upcoming-toggle .caret { display: inline-block; inline-size: 1em; }
+.upcoming .card.task { opacity: .85; }
+
+/* ---------- done cards & photos ---------- */
+.task-done .photo-add { min-inline-size: 40px; padding-inline: 8px; font-size: 20px; }
+.thumb-btn { flex: 0 0 52px; inline-size: 52px; block-size: 52px; border-radius: var(--radius-sm); overflow: hidden; border: 2px solid var(--chalk-line); }
+.thumb { display: block; inline-size: 100%; block-size: 100%; object-fit: cover; }
+.photo-viewer {
+  position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: calc(var(--safe-t) + 12px) 12px calc(var(--safe-b) + 12px);
+  background: rgba(8, 16, 12, .94);
+}
+.photo-viewer img { max-inline-size: 100%; max-block-size: calc(100dvh - 40px); object-fit: contain; border-radius: 6px; }
+.viewer-close {
+  position: absolute; inset-block-start: calc(var(--safe-t) + 10px); inset-inline-end: 12px; inline-size: 48px; block-size: 48px;
+  border-radius: 50%; border: 2px dashed var(--chalk); color: var(--chalk); font-size: 24px; background: rgba(0, 0, 0, .4);
+}
+
+/* ---------- sheets: bigger date/time, repeat, day picker, reason chips ---------- */
+.sheet .input.dt { min-block-size: 54px; font-size: 23px; padding-block: 10px; color-scheme: dark; }
+.dt-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
+.dt-row .field { min-inline-size: 0; }
+.every-row { display: flex; align-items: center; gap: 8px; font-size: 19px; }
+.sheet .input.every-n { inline-size: 80px; text-align: center; color-scheme: dark; }
+.day-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.day-btn {
+  inline-size: 44px; block-size: 44px; border-radius: 50%; border: 2px solid var(--chalk-line); color: var(--chalk-dim);
+  font: 700 16px/1 var(--font-body);
+}
+.day-btn.on { color: var(--chalk-yellow); border: 2px dashed var(--chalk-yellow); background: rgba(246, 226, 122, .1); }
+.day-mode.on { color: var(--chalk-yellow); border: 2px dashed var(--chalk-yellow); background: rgba(246, 226, 122, .08); }
+.day-modes button { flex: 1; min-block-size: 40px; border-radius: 8px; font: 700 18px/1 var(--font-body); color: var(--chalk-dim); }
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-btn {
+  min-block-size: 40px; padding: 4px 14px; border-radius: 20px; border: 2px dashed var(--chalk-line); color: var(--chalk);
+  font: 700 17px/1.1 var(--font-body);
+}
+.chip-btn:active { background: var(--chalk-dust); }
+.block-task { margin: 0; font: 700 22px/1.2 var(--font-hand); color: var(--chalk); }
+.routine-manage h3 { margin-block: 10px 0; }
+.routine-item .btn { flex-shrink: 0; }

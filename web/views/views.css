@@ -1,0 +1,103 @@
+/* Views: list, tasks, chat. Tokens come from styles.css. */
+
+.section-h { margin: 8px 4px 0; font: 700 24px/1.1 var(--font-hand); color: var(--chalk-blue); }
+
+/* ---------- list ---------- */
+.sticky-form {
+  position: sticky; inset-block-start: -10px; z-index: 5; margin-inline: -14px; padding: 6px 14px 8px;
+  background: var(--board); border-block-end: 2px solid var(--chalk-line);
+}
+.add-form { display: flex; gap: 8px; align-items: stretch; }
+.add-form .input { flex: 1; min-inline-size: 0; }
+.add-form .qty-in { flex: 0 0 76px; inline-size: 76px; text-align: center; padding-inline: 8px; }
+.add-form .btn { flex-shrink: 0; padding-inline: 18px; }
+
+.item { padding-inline-start: 0; align-items: center; transition: opacity .2s ease; }
+.item .body { padding-block: 4px; cursor: pointer; border-radius: 10px; }
+.item .name { font: 700 25px/1.1 var(--font-hand); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.item .note { font-size: 15px; color: var(--chalk-dim); overflow-wrap: anywhere; }
+.item .sub { font-size: 14px; color: var(--chalk-dim); }
+.item .qty { color: var(--chalk-yellow); border-color: var(--chalk-yellow); font-family: var(--font-body); }
+.item.is-done .name, .item.is-done .note { text-decoration: line-through; text-decoration-color: var(--chalk); text-decoration-thickness: 2px; }
+.item.is-done { opacity: .55; filter: blur(.25px); }
+.item.pop { animation: pop-in .28s ease; }
+@keyframes pop-in {
+  from { transform: scale(.96); opacity: .4; }
+  to { transform: none; opacity: 1; }
+}
+
+.check {
+  position: relative; z-index: 0; flex: 0 0 44px; inline-size: 44px; block-size: 44px; display: grid; place-items: center;
+  font: 700 32px/1 var(--font-hand); color: var(--chalk-yellow);
+}
+.check::before {
+  content: ""; position: absolute; inset: 7px; border-radius: 52% 48% 50% 50% / 50% 52% 48% 50%; border: 2.5px solid var(--chalk);
+  transition: background .15s ease, border-color .15s ease;
+}
+.check.on::before { border-color: var(--chalk-yellow); background: rgba(246, 226, 122, .1); }
+.check:active::before { background: var(--chalk-dust); border-style: dashed; }
+.check > * { position: relative; }
+
+/* ---------- tasks ---------- */
+.tasks-head { display: flex; justify-content: flex-end; }
+.seg { display: inline-flex; padding: 3px; gap: 4px; border-radius: var(--radius-sm); border: 2px solid var(--chalk-line); inline-size: 100%; }
+.seg button { flex: 1; min-block-size: 40px; border-radius: 8px; font: 700 19px/1 var(--font-body); color: var(--chalk-dim); }
+.seg button.on { color: var(--chalk-yellow); border: 2px dashed var(--chalk-yellow); background: rgba(246, 226, 122, .08); }
+
+.task { display: flex; align-items: center; gap: 12px; padding: 12px 6px; }
+.task .body { padding-block: 2px; }
+.task[data-id] .body[role="button"] { cursor: pointer; }
+.t-title { font: 700 26px/1.1 var(--font-hand); overflow-wrap: anywhere; }
+.task .note { color: var(--chalk-dim); font-size: 16px; margin-block-start: 2px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px; margin-block-start: 8px; }
+.chip { font-size: 14px; padding: 1px 10px; border-radius: 12px; border: 1.5px solid var(--chalk-line); color: var(--chalk-dim); }
+.chip.overdue { color: var(--chalk-pink); border: 1.5px dashed var(--chalk-pink); }
+.done-btn {
+  flex: 0 0 auto; min-inline-size: 64px; min-block-size: 64px; border-radius: var(--radius-sm); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2px; color: var(--chalk-yellow); border: 2px dashed var(--chalk-yellow);
+  font: 700 30px/1 var(--font-hand);
+}
+.done-btn span { font: 700 15px/1 var(--font-body); }
+.done-btn:active { background: rgba(246, 226, 122, .2); }
+.task-done { opacity: .55; }
+.task-done .struck { text-decoration: line-through; text-decoration-color: var(--chalk); text-decoration-thickness: 2px; font-size: 17px; }
+.sheet textarea.input { resize: vertical; min-block-size: 80px; font-family: inherit; }
+.sheet select.input { appearance: auto; }
+.sheet select.input option { background: var(--board-2); color: var(--chalk); }
+
+/* ---------- chat ---------- */
+.view.chat { block-size: 100%; min-block-size: 0; gap: 6px; }
+.msgs-wrap { position: relative; flex: 1; min-block-size: 0; display: flex; flex-direction: column; }
+.msgs {
+  flex: 1; min-block-size: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 3px;
+  padding-block: 4px; margin-inline: -4px; padding-inline: 4px;
+}
+.load-earlier { align-self: center; margin-block-end: 6px; flex-shrink: 0; }
+.day-sep { text-align: center; margin-block: 10px 6px; flex-shrink: 0; }
+.day-sep span { font: 700 18px/1 var(--font-hand); color: var(--chalk-dim); border-block-end: 2px dashed var(--chalk-faint); padding: 2px 12px; }
+.msg { display: flex; flex-direction: column; max-inline-size: 82%; flex-shrink: 0; }
+.msg.first { margin-block-start: 8px; }
+.msg.mine { align-self: flex-end; align-items: flex-end; }
+.msg.theirs { align-self: flex-start; align-items: flex-start; }
+.msg .author { font: 700 19px/1.1 var(--font-hand); color: var(--chalk-blue); margin: 0 10px 2px; }
+.bubble {
+  padding: 6px 12px 4px; border-radius: 16px 18px 15px 17px / 17px 15px 18px 16px; background: transparent; color: var(--chalk);
+  border: 2px solid var(--chalk-line); overflow-wrap: anywhere; white-space: pre-wrap; user-select: text; -webkit-touch-callout: none;
+}
+.msg.mine .bubble { border-color: var(--chalk-yellow); border-end-end-radius: 4px; }
+.msg.theirs .bubble { border-end-start-radius: 4px; }
+.bubble .time { display: block; text-align: end; font-size: 13px; color: var(--chalk-dim); margin-block-start: 1px; white-space: nowrap; }
+.new-pill {
+  position: absolute; inset-inline: 0; inset-block-end: 8px; margin-inline: auto; inline-size: max-content; min-block-size: 40px;
+  padding-inline: 18px; border-radius: 20px; background: var(--board-2); color: var(--chalk-yellow);
+  border: 2px dashed var(--chalk-yellow); font: 700 18px/1 var(--font-body); box-shadow: 0 3px 10px rgba(0, 0, 0, .5);
+}
+.typing { min-block-size: 18px; font-size: 15px; color: var(--chalk-dim); padding-inline: 8px; flex-shrink: 0; }
+.composer { display: flex; gap: 8px; align-items: flex-end; flex-shrink: 0; padding-block-start: 2px; }
+.composer-in { flex: 1; min-inline-size: 0; resize: none; line-height: 24px; max-block-size: 140px; overflow-y: auto; padding-inline: 6px; }
+.composer .send { flex-shrink: 0; min-block-size: 46px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .item.pop { animation: none; }
+  .backdrop, .sheet, .toast, .btn, .item { transition: none; }
+}

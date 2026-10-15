@@ -1,0 +1,28 @@
+{
+  "name": "bayt",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-07-19",
+  "compatibility_flags": ["nodejs_compat"],
+  // SETUP_CODE is a secret: set it with `wrangler secret put SETUP_CODE`
+  // (local dev: put it in .dev.vars, see .dev.vars.example).
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bayt",
+      "database_id": "6418836b-87a7-427d-99ce-f0e98105e8ad",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "bayt-media" }],
+  "durable_objects": {
+    "bindings": [{ "name": "HOUSEHOLD", "class_name": "Household" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Household"] }],
+  "triggers": { "crons": ["17 3 * * *"] }
+}
