@@ -285,6 +285,8 @@ tasks.patch("/tasks/:id", requireMember, async (c) => {
     becameDone = true;
     clearBlock = true;
   } else if (b.done === false) {
+    // Helpers may only undo their own completions (matches the client's Undo rule).
+    if (!parent && row.done_at !== null && row.done_by !== me.id) return fail(c, "forbidden", 403);
     set("done_by", null);
     set("done_at", null);
     undone = row.done_at !== null;

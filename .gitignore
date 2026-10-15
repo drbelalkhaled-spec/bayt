@@ -3,4 +3,13 @@ dist
 .wrangler
 .dev.vars
 *.log
-screenshots/
+/screenshots/
+
+# Local Android packaging tools, build output and private signing material.
+.android-tools/
+android/.gradle/
+android/**/build/
+android/local.properties
+android/signing/
+android/signing.properties
+releases/

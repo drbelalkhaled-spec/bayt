@@ -377,3 +377,15 @@ describe("done photo", () => {
     expect((await row(t2.json.task.id)).done_photo_key).toBe(dk);
   });
 });
+
+describe("undo permissions", () => {
+  it("a helper cannot undo a task someone else completed, but can undo her own", async () => {
+    const { mom, nanny } = await makeHousehold();
+    const t = (await api("/api/tasks", { token: mom.token, body: { title: "Unassigned chore" } })).json.task;
+    expect((await api("/api/tasks/" + t.id, { token: mom.token, method: "PATCH", body: { done: true } })).status).toBe(200);
+    expect((await api("/api/tasks/" + t.id, { token: nanny.token, method: "PATCH", body: { done: false } })).status).toBe(403);
+    expect((await api("/api/tasks/" + t.id, { token: mom.token, method: "PATCH", body: { done: false } })).status).toBe(200);
+    expect((await api("/api/tasks/" + t.id, { token: nanny.token, method: "PATCH", body: { done: true } })).status).toBe(200);
+    expect((await api("/api/tasks/" + t.id, { token: nanny.token, method: "PATCH", body: { done: false } })).status).toBe(200);
+  });
+});

@@ -23,5 +23,7 @@
     "workbox-routing": "^7.4.1",
     "workbox-strategies": "^7.4.1",
     "wrangler": "^4.151.0"
-  }
+  },
+  "license": "MIT",
+  "description": "Private family PWA on Cloudflare: shared shopping list, chores for the helper at home, and a family chat"
 }

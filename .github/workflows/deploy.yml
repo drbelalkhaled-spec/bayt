@@ -25,7 +25,9 @@ jobs:
 
   deploy:
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Opt-in: set the repository variable DEPLOY_ENABLED=true (plus the two
+    # Cloudflare secrets) to deploy on every push to main. Forks skip this job.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     # Two quick pushes to main deploy one after the other, never at the same time,
     # and a deploy that has started is never cancelled halfway.

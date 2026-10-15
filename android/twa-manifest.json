@@ -1,0 +1,42 @@
+{
+  "packageId": "dev.workers.dr_belal_khaled.bayt",
+  "host": "bayt.dr-belal-khaled.workers.dev",
+  "name": "Bayt",
+  "launcherName": "Bayt",
+  "display": "standalone",
+  "themeColor": "#C9651F",
+  "themeColorDark": "#C9651F",
+  "navigationColor": "#2B4636",
+  "navigationColorDark": "#2B4636",
+  "navigationDividerColor": "#2B4636",
+  "backgroundColor": "#2B4636",
+  "enableNotifications": true,
+  "startUrl": "/#/list",
+  "iconUrl": "https://bayt.dr-belal-khaled.workers.dev/icons/icon-512.png",
+  "maskableIconUrl": "https://bayt.dr-belal-khaled.workers.dev/icons/maskable-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./signing/bayt-release.keystore",
+    "alias": "bayt"
+  },
+  "appVersionCode": 1,
+  "appVersion": "1.0.0",
+  "shortcuts": [],
+  "generatorApp": "Bubblewrap 1.27.0",
+  "webManifestUrl": "https://bayt.dr-belal-khaled.workers.dev/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://bayt.dr-belal-khaled.workers.dev/",
+  "minSdkVersion": 24,
+  "orientation": "portrait",
+  "fingerprints": [
+    {
+      "name": "Bayt release key",
+      "value": "CE:76:F8:E7:7F:EE:D5:9B:70:BE:E8:6D:FA:50:61:14:79:17:E6:65:E0:51:A6:3F:BB:34:0C:C9:0A:EB:D3:ED"
+    }
+  ],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": []
+}

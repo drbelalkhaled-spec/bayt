@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "dev.workers.dr_belal_khaled.bayt",
+      "sha256_cert_fingerprints": [
+        "CE:76:F8:E7:7F:EE:D5:9B:70:BE:E8:6D:FA:50:61:14:79:17:E6:65:E0:51:A6:3F:BB:34:0C:C9:0A:EB:D3:ED"
+      ]
+    }
+  }
+]
