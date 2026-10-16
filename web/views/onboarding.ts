@@ -71,6 +71,51 @@ function form(
   return el;
 }
 
+/** Pull the invite secret out of a pasted link (or a bare secret). */
+function pastedSecret(text: string): string | null {
+  const t = text.trim();
+  const m = /#join=([\w-]+)/.exec(t);
+  if (m) return m[1];
+  return /^[\w-]{16,}$/.test(t) ? t : null;
+}
+
+/**
+ * "Paste invite link" form, for when tapping the link opened another app or
+ * browser. A valid paste re-runs onboarding as if the link had been opened here.
+ */
+function pasteInvite(root: HTMLElement, done: () => void): HTMLElement {
+  const err = h("p", { class: "error", role: "alert" });
+  const input = h("input", {
+    class: "input",
+    name: "invite",
+    // Plain text, not "url": a shared message may carry words around the link.
+    type: "text",
+    inputMode: "url",
+    placeholder: "https://.../#join=...",
+    autocomplete: "off",
+    required: true,
+  });
+  return h(
+    "form",
+    {
+      class: "stack",
+      onsubmit: (e: Event) => {
+        e.preventDefault();
+        const secret = pastedSecret(input.value);
+        if (!secret) {
+          err.textContent = "That does not look like an invite link. Copy the whole link and try again.";
+          return;
+        }
+        history.replaceState(null, "", "#join=" + secret);
+        void showOnboarding(root, done);
+      },
+    },
+    h("label", { class: "field" }, h("span", null, "Got an invite link? Paste it here"), input),
+    err,
+    h("button", { class: "btn primary block", type: "submit" }, "Open invite"),
+  );
+}
+
 /**
  * Show the right onboarding screen into `root`. Resolves nothing; calls `done`
  * once a token was stored.
@@ -93,7 +138,7 @@ export async function showOnboarding(root: HTMLElement, done: () => void): Promi
       );
     } catch (ex) {
       const code = ex instanceof ApiError ? ex.code : "network";
-      root.replaceChildren(shell(h("h1", null, "Invite problem"), h("p", null, ERRORS[code] || ERRORS.bad_invite)));
+      root.replaceChildren(shell(h("h1", null, "Invite problem"), h("p", null, ERRORS[code] || ERRORS.bad_invite), pasteInvite(root, done)));
     }
     return;
   }
@@ -125,6 +170,8 @@ export async function showOnboarding(root: HTMLElement, done: () => void): Promi
       ),
     );
   } else {
-    root.replaceChildren(shell(h("h1", null, "Welcome to Bayt"), h("p", null, "Ask a family member for an invite link.")));
+    root.replaceChildren(
+      shell(h("h1", null, "Welcome to Bayt"), h("p", null, "Ask a family member for an invite link."), pasteInvite(root, done)),
+    );
   }
 }
