@@ -7,6 +7,8 @@ export const ALERT_EVERY_MS = 3_600_000;
 const MAX_SOURCE = 120;
 const MAX_MESSAGE = 300;
 const MAX_DETAIL = 2000;
+/** The log never grows past this many rows; the oldest go first. */
+export const MAX_ROWS = 500;
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message || e.name : String(e ?? ""));
 
@@ -14,16 +16,32 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message || e.n
  * Records a problem in error_log and pushes a short alert to parents who turned alerts on.
  * Never throws: it runs inside error handlers.
  */
-export async function reportError(env: Env, source: string, err: unknown, detail?: string | null): Promise<void> {
+export async function reportError(
+  env: Env,
+  source: string,
+  err: unknown,
+  detail?: string | null,
+  memberId: string | null = null,
+): Promise<void> {
   try {
     console.error(source, err);
     const message = messageOf(err).slice(0, MAX_MESSAGE) || "Unknown error";
     const extra = (detail ?? (err instanceof Error ? err.stack : null) ?? "").slice(0, MAX_DETAIL) || null;
     const t = now();
     const where = source.slice(0, MAX_SOURCE);
-    await env.DB.prepare("INSERT INTO error_log(id, at, source, message, detail) VALUES (?1, ?2, ?3, ?4, ?5)")
-      .bind(newId(), t, where, message, extra)
-      .run();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO error_log(id, at, source, message, detail, member_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)").bind(
+        newId(),
+        t,
+        where,
+        message,
+        extra,
+        memberId,
+      ),
+      env.DB.prepare(
+        "DELETE FROM error_log WHERE id NOT IN (SELECT id FROM error_log ORDER BY at DESC, id DESC LIMIT ?1)",
+      ).bind(MAX_ROWS),
+    ]);
     const { results } = await env.DB.prepare(
       `SELECT id, push_sub FROM members
        WHERE role = 'parent' AND error_alerts = 1 AND removed_at IS NULL AND push_sub IS NOT NULL`,

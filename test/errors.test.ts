@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCleanup } from "../src/lib/cleanup";
-import { reportError } from "../src/lib/errors";
+import { MAX_ROWS, reportError } from "../src/lib/errors";
 import { api, makeHousehold, resetDb, type TestMember } from "./helpers";
 
 const EP = "https://push.example.test/send/errors";
@@ -63,6 +63,27 @@ describe("/api/errors", () => {
     for (let i = 0; i < 19; i++) await api("/api/errors", { token: nanny.token, body: { message: "e" + i } });
     expect((await api("/api/errors", { token: nanny.token, body: { message: "one too many" } })).status).toBe(429);
     expect((await api("/api/errors", { token: mom.token, body: { message: "mom's own cap" } })).status).toBe(200);
+  });
+
+  it("the hourly cap survives a rename", async () => {
+    for (let i = 0; i < 20; i++) await api("/api/errors", { token: dad.token, body: { message: "d" + i } });
+    expect((await api("/api/errors", { token: dad.token, body: { message: "blocked" } })).status).toBe(429);
+    expect((await api("/api/me", { method: "PATCH", token: dad.token, body: { name: "Daddy" } })).status).toBe(200);
+    expect((await api("/api/errors", { token: dad.token, body: { message: "still blocked" } })).status).toBe(429);
+  });
+
+  it("keeps at most MAX_ROWS rows, dropping the oldest", async () => {
+    const t = Date.now() - 1000;
+    await env.DB.batch(
+      Array.from({ length: MAX_ROWS }, (_, i) =>
+        env.DB.prepare("INSERT INTO error_log(id, at, source, message) VALUES (?1, ?2, 'old', ?3)").bind("r" + i, t + i, "m" + i),
+      ),
+    );
+    await reportError(env, "new", "newest");
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM error_log").first<{ n: number }>();
+    expect(n!.n).toBe(MAX_ROWS);
+    expect(await env.DB.prepare("SELECT 1 FROM error_log WHERE id = 'r0'").first()).toBeNull();
+    expect(await env.DB.prepare("SELECT 1 FROM error_log WHERE message = 'newest'").first()).not.toBeNull();
   });
 
   it("parents list, clear and toggle; helpers cannot", async () => {

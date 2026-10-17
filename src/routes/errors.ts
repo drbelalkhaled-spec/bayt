@@ -23,12 +23,13 @@ errors.post("/errors", requireMember, async (c) => {
   if (b.stack !== undefined && b.stack !== null && typeof b.stack !== "string") return fail(c, "bad_stack", 400);
   if (b.where !== undefined && b.where !== null && typeof b.where !== "string") return fail(c, "bad_where", 400);
   const source = `app · ${me.name}`;
-  const recent = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM error_log WHERE source = ?1 AND at > ?2")
-    .bind(source, now() - 3_600_000)
+  // Counted by member id, not name: a parent can rename themselves.
+  const recent = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM error_log WHERE member_id = ?1 AND at > ?2")
+    .bind(me.id, now() - 3_600_000)
     .first<{ n: number }>();
   if ((recent?.n ?? 0) >= CLIENT_PER_HOUR) return fail(c, "too_many", 429);
   const where = typeof b.where === "string" && b.where ? `on ${b.where.slice(0, 60)}\n` : "";
-  await reportError(c.env, source, b.message.trim(), where + (typeof b.stack === "string" ? b.stack : ""));
+  await reportError(c.env, source, b.message.trim(), where + (typeof b.stack === "string" ? b.stack : ""), me.id);
   return c.json({ ok: true });
 });
 
