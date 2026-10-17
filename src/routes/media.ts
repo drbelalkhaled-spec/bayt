@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { requireMember, requireMemberOrQuery, type AppEnv } from "../lib/auth";
+import { canSeeTrash, type TrashRow } from "../lib/trash";
 import { fail, newId, now } from "../lib/util";
 
 export const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
@@ -39,6 +40,22 @@ media.post("/media", requireMember, async (c) => {
 media.get("/media/:key", requireMemberOrQuery, async (c) => {
   const key = c.req.param("key");
   if (!KEY_RE.test(key)) return fail(c, "not_found", 404);
+  // A photo/voice note whose message, item or task is in the trash is kept only so it can be restored:
+  // serve it to those who may see that trash entry (a deleted message: only its author), nobody else.
+  const db = c.env.DB;
+  const trashed = (
+    await db.prepare("SELECT kind, deleted_by FROM trash WHERE media_key = ?1").bind(key).all<Pick<TrashRow, "kind" | "deleted_by">>()
+  ).results;
+  if (trashed.length) {
+    const live = await db
+      .prepare(
+        `SELECT 1 FROM items WHERE photo_key = ?1 UNION ALL SELECT 1 FROM tasks WHERE done_photo_key = ?1
+         UNION ALL SELECT 1 FROM messages WHERE media_key = ?1 LIMIT 1`,
+      )
+      .bind(key)
+      .first();
+    if (!live && !trashed.some((t) => canSeeTrash(t, c.get("me")))) return fail(c, "not_found", 404);
+  }
   const obj = await c.env.MEDIA.get(key);
   if (!obj) return fail(c, "not_found", 404);
   return new Response(obj.body, {

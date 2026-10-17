@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCleanup } from "../src/lib/cleanup";
 import { api, makeHousehold, resetDb, type TestMember } from "./helpers";
@@ -141,6 +141,23 @@ describe("trash", () => {
     expect((await api(`/api/trash/${d2.json.trash_id}`, { method: "DELETE", token: dad.token })).status).toBe(404);
     expect((await api(`/api/trash/${d2.json.trash_id}`, { method: "DELETE", token: nanny.token })).status).toBe(200);
     expect(await trashList(nanny)).toEqual([]);
+  });
+
+  it("a deleted message's photo is only served to its author while in the trash", async () => {
+    const up = await SELF.fetch("http://x/api/media", {
+      method: "POST",
+      headers: { authorization: `Bearer ${nanny.token}`, "content-type": "image/png" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+    const key = ((await up.json()) as any).key;
+    const m = (await post(nanny, { kind: "photo", media_key: key })).json.message;
+    const get = (who: TestMember) => SELF.fetch(`http://x/api/media/${key}`, { headers: { authorization: `Bearer ${who.token}` } });
+    expect((await get(dad)).status).toBe(200);
+    const d = await api(`/api/messages/${m.id}`, { method: "DELETE", token: nanny.token });
+    expect((await get(dad)).status).toBe(404);
+    expect((await get(nanny)).status).toBe(200);
+    await restore(nanny, d.json.trash_id);
+    expect((await get(dad)).status).toBe(200);
   });
 
   it("expires after 24 hours", async () => {
