@@ -110,9 +110,18 @@ You need a free Cloudflare account and `npx wrangler login`.
 
 ### Continuous deployment (optional)
 
-`.github/workflows/deploy.yml` runs typecheck, tests and build on every push. To also deploy on
-every push to `main`, add the repository secrets `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID` and the repository variable `DEPLOY_ENABLED=true`.
+`.github/workflows/deploy.yml` runs typecheck, tests and build on every push. To deploy on every
+push to `main`, pick **one** of these (not both, or each push deploys twice):
+
+- **Cloudflare Workers Builds** (no token to manage): in the dashboard, open the Worker →
+  **Settings → Builds → Connect**, choose the repository and branch `main`, and set
+  - Build command: `npm run build`
+  - Deploy command: `npx wrangler d1 migrations apply bayt --remote && npx wrangler deploy`
+- **GitHub Actions**: add the repository secrets `CLOUDFLARE_API_TOKEN` and
+  `CLOUDFLARE_ACCOUNT_ID` and the repository variable `DEPLOY_ENABLED=true`.
+
+Either way, the GitHub run's "success" alone does not mean a deploy happened; check the
+deploy job (or the Cloudflare build) actually ran.
 
 ## Android APK (optional)
 
