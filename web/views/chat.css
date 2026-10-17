@@ -104,6 +104,41 @@
 .act-preview { margin: 0; overflow-wrap: anywhere; font-style: italic; }
 .clip-tmp { position: fixed; inset-block-start: 0; inset-inline-start: 0; opacity: 0; pointer-events: none; }
 
+/* ---------- replies, reactions, search ---------- */
+.chat-top { display: flex; align-items: stretch; gap: 8px; justify-content: flex-end; flex-shrink: 0; }
+.chat-top .pin-bar { flex: 1; inline-size: auto; min-inline-size: 0; }
+.search-btn { flex: 0 0 44px; min-block-size: 44px; padding: 0; font-size: 18px; }
+.quote {
+  display: flex; flex-direction: column; gap: 1px; inline-size: 100%; text-align: start; margin-block-end: 4px; padding: 4px 8px;
+  border-inline-start: 3px solid var(--chalk-blue); border-radius: 6px; background: rgba(159, 211, 230, .10); color: var(--chalk);
+}
+.quote-who { font-size: 13px; font-weight: 700; color: var(--chalk-blue); }
+.quote-text { font-size: 14px; color: var(--chalk-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-inline-size: 260px; }
+.reply-bar {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 4px 8px; margin-block-end: 4px;
+  border-inline-start: 3px solid var(--chalk-blue); border-radius: 6px; background: rgba(159, 211, 230, .08);
+}
+.reply-main { flex: 1; min-inline-size: 0; display: flex; flex-direction: column; }
+.reply-main .quote-text { max-inline-size: none; }
+.reacts { display: flex; flex-wrap: wrap; gap: 4px; margin: -4px 8px 0; position: relative; }
+.msg.mine .reacts { justify-content: flex-end; }
+.react-chip {
+  display: inline-flex; align-items: center; gap: 3px; min-block-size: 28px; padding: 0 8px; border-radius: 14px; font-size: 16px; line-height: 1;
+  border: 1.5px solid var(--chalk-line); background: var(--board, #1f3a2c); color: var(--chalk);
+}
+.react-chip.on { border-color: var(--chalk-yellow); background: rgba(246, 226, 122, .15); }
+.react-n { font-size: 13px; font-weight: 700; }
+.react-pick { display: flex; justify-content: space-between; gap: 4px; }
+.react-opt { flex: 1; min-block-size: 48px; font-size: 26px; border-radius: 12px; border: 1.5px solid transparent; }
+.react-opt.on { border-color: var(--chalk-yellow); background: rgba(246, 226, 122, .15); }
+.react-opt:active { background: rgba(246, 226, 122, .2); }
+.search-results { display: flex; flex-direction: column; gap: 4px; max-block-size: 55vh; overflow-y: auto; }
+.search-row {
+  display: flex; flex-direction: column; gap: 2px; text-align: start; padding: 8px 4px; color: var(--chalk);
+  border-block-end: 1.5px dashed var(--chalk-faint);
+}
+.search-row mark { background: rgba(246, 226, 122, .35); color: inherit; border-radius: 3px; padding: 0 1px; }
+
 @media (prefers-reduced-motion: reduce) {
   .rec-dot, .spin, .msg.flash .bubble { animation: none; }
 }

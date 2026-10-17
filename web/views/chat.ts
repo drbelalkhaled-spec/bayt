@@ -20,8 +20,23 @@ interface Msg {
   media_key: string | null;
   media_meta: { w?: number; h?: number; durationMs?: number } | null;
   pinned_at: number | null;
+  /** The message this one answers (a short copy of it), or null. */
+  reply?: ReplyRef | null;
   /** Created on this device while offline (or not yet confirmed by the server); replaced by the server row with the same id. */
   local?: boolean;
+}
+interface ReplyRef {
+  id: string;
+  author_id?: string;
+  author_name?: string;
+  body?: string;
+  kind?: string;
+  deleted?: boolean;
+}
+interface Reaction {
+  message_id: string;
+  member_id: string;
+  emoji: string;
 }
 interface PinnedMsg extends Msg {
   pinned_by_name: string;
@@ -37,6 +52,7 @@ interface Page {
   cursor: string | null;
   reads?: ReadRow[];
   pinned?: PinnedMsg[];
+  reactions?: Reaction[];
 }
 interface Pending {
   id: string;
@@ -51,11 +67,18 @@ const MAX_LINES = 5;
 const READ_DEBOUNCE_MS = 1000;
 const MAX_VOICE_MS = 120_000;
 const MIN_VOICE_MS = 700;
+const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+const SEARCH_DEBOUNCE_MS = 300;
 
 let root: HTMLElement | null = null;
 let msgs: Msg[] = [];
 let reads: ReadRow[] = [];
 let pinned: PinnedMsg[] = [];
+let reactions: Reaction[] = [];
+/** The message being answered; shown above the composer until sent or cancelled. */
+let replyTo: Msg | null = null;
+let replyBar: HTMLElement | null = null;
+let composer: HTMLTextAreaElement | null = null;
 let pending: Pending[] = [];
 let olderCursor: string | null = null;
 let lastCursor: string | null = null;
@@ -147,6 +170,10 @@ function applyExtras(p: Page): boolean {
     reads = p.reads;
     changed = true;
   }
+  if (p.reactions && JSON.stringify(p.reactions) !== JSON.stringify(reactions)) {
+    reactions = p.reactions;
+    changed = true;
+  }
   if (p.pinned && JSON.stringify(p.pinned.map((x) => x.id)) !== JSON.stringify(pinned.map((x) => x.id))) {
     pinned = p.pinned;
     changed = true;
@@ -186,7 +213,7 @@ function render(): void {
   const seen = seenText();
   const pinIds = new Set(pinned.map((p) => p.id));
   waiting = queuedIds();
-  const s = JSON.stringify([msgs.map((m) => m.id), olderCursor !== null, [...pinIds], seen, pending.map((p) => p.id), [...waiting]]);
+  const s = JSON.stringify([msgs.map((m) => m.id), olderCursor !== null, [...pinIds], seen, pending.map((p) => p.id), [...waiting], reactions]);
   if (s === sig) return;
   sig = s;
   const top = msgsEl.scrollTop;
@@ -213,10 +240,12 @@ function render(): void {
         h(
           "div",
           { class: "bubble" + (isMedia ? " media " + m.kind : "") },
+          m.reply ? quoteEl(m.reply) : null,
           isMedia ? mediaFor(m) : null,
           m.body ? h("span", { class: "text" }, m.body) : null,
           h("span", { class: "time" }, pinIds.has(m.id) ? h("span", { class: "pin-ico", "aria-label": "Pinned" }, "\u{1F4CC} ") : null, m.local && waiting.has(m.id) ? h("span", { class: "wait-clock", title: "Waiting to send", "aria-label": "Waiting to send" }, "⏳") : timeLabel(m.created_at)),
         ),
+        reactionsEl(m),
         seen && seen.id === m.id ? h("div", { class: "seen" }, seen.text) : null,
       ),
     );
@@ -239,6 +268,169 @@ function paintTyping(): void {
   if (!typingEl) return;
   const names = [...typers.keys()].map(memberName);
   typingEl.textContent = names.length === 0 ? "" : names.length === 1 ? `${names[0]} is typing…` : `${names.join(" and ")} are typing…`;
+}
+
+function refPreview(r: ReplyRef): string {
+  if (r.deleted) return "Message deleted";
+  if (r.kind === "photo") return "\u{1F4F7} " + (r.body || "Photo");
+  if (r.kind === "voice") return "\u{1F3A4} Voice note";
+  return r.body ?? "";
+}
+
+/** The quoted message at the top of a reply; tap to jump to it. */
+function quoteEl(r: ReplyRef): HTMLElement {
+  return h(
+    "button",
+    { class: "quote", type: "button", onclick: () => void jumpTo(r.id), "aria-label": "Go to the quoted message" },
+    r.deleted ? null : h("span", { class: "quote-who" }, r.author_id === session.me?.id ? "You" : r.author_name || memberName(r.author_id ?? "")),
+    h("span", { class: "quote-text" }, oneLine(refPreview(r), 140)),
+  );
+}
+
+/** Reaction chips under a bubble: one per emoji with a count; tap to add or take back yours. */
+function reactionsEl(m: Msg): HTMLElement | null {
+  const mine = session.me?.id;
+  const groups = new Map<string, string[]>();
+  for (const r of reactions) if (r.message_id === m.id) groups.set(r.emoji, [...(groups.get(r.emoji) ?? []), r.member_id]);
+  if (!groups.size) return null;
+  return h(
+    "div",
+    { class: "reacts" },
+    [...groups].map(([emoji, who]) => {
+      const me = !!mine && who.includes(mine);
+      const names = who.map((id) => (id === mine ? "You" : memberName(id))).join(", ");
+      return h(
+        "button",
+        { class: "react-chip" + (me ? " on" : ""), type: "button", title: names, "aria-label": `${emoji} by ${names}`, onclick: () => void react(m, me ? null : emoji) },
+        emoji,
+        who.length > 1 ? h("span", { class: "react-n" }, String(who.length)) : null,
+      );
+    }),
+  );
+}
+
+async function react(m: Msg, emoji: string | null): Promise<void> {
+  const me = session.me?.id;
+  if (!me || m.local) return;
+  const before = reactions;
+  reactions = reactions.filter((r) => !(r.message_id === m.id && r.member_id === me));
+  if (emoji) reactions = [...reactions, { message_id: m.id, member_id: me, emoji }];
+  render();
+  try {
+    await api(`/api/messages/${m.id}/reaction`, { method: "PUT", body: { emoji } });
+  } catch (e) {
+    reactions = before;
+    render();
+    toast(errMsg(e), true);
+  }
+}
+
+function paintReply(): void {
+  if (!replyBar) return;
+  replyBar.hidden = !replyTo;
+  clear(replyBar);
+  if (!replyTo) return;
+  const r = replyTo;
+  add(
+    replyBar,
+    h(
+      "div",
+      { class: "reply-main" },
+      h("span", { class: "quote-who" }, "↩ Replying to " + (isMine(r) ? "yourself" : r.author_name || memberName(r.author_id))),
+      h("span", { class: "quote-text" }, oneLine(preview(r), 140)),
+    ),
+    h("button", { class: "btn small ghost", type: "button", "aria-label": "Cancel reply", onclick: () => setReply(null) }, "✕"),
+  );
+}
+
+function setReply(m: Msg | null): void {
+  replyTo = m;
+  paintReply();
+  if (m) composer?.focus();
+}
+
+const refOf = (m: Msg): ReplyRef => ({ id: m.id, author_id: m.author_id, author_name: m.author_name, body: m.body.slice(0, 140), kind: m.kind });
+
+/** Scroll to a message, loading older pages if it is not on screen yet. */
+async function jumpTo(id: string): Promise<void> {
+  if (scrollToMsg(id)) return;
+  for (let i = 0; i < 30 && olderCursor !== null && root; i++) {
+    await loadOlder();
+    if (scrollToMsg(id)) return;
+  }
+  toast("That message is no longer in the chat");
+}
+
+function highlighted(text: string, q: string): (HTMLElement | string)[] {
+  const out: (HTMLElement | string)[] = [];
+  const lo = text.toLowerCase();
+  const lq = q.toLowerCase();
+  let i = 0;
+  for (;;) {
+    const j = lq ? lo.indexOf(lq, i) : -1;
+    if (j < 0) break;
+    if (j > i) out.push(text.slice(i, j));
+    out.push(h("mark", null, text.slice(j, j + q.length)));
+    i = j + q.length;
+  }
+  out.push(text.slice(i));
+  return out;
+}
+
+function openSearch(): void {
+  const sheet = openSheet("Search messages");
+  const input = h("input", { class: "input", type: "search", maxLength: 100, placeholder: "Search…", "aria-label": "Search messages", enterKeyHint: "search" });
+  const results = h("div", { class: "search-results", role: "list" });
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let seq = 0;
+  const run = async (): Promise<void> => {
+    const q = input.value.trim();
+    const my = ++seq;
+    clear(results);
+    if (q.length < 2) return;
+    try {
+      const r = await api<{ messages: Msg[] }>("/api/messages/search?q=" + encodeURIComponent(q));
+      if (my !== seq) return;
+      if (!r.messages.length) return void add(results, h("p", { class: "muted" }, "Nothing found"));
+      for (const m of r.messages) {
+        const at = m.body.toLowerCase().indexOf(q.toLowerCase());
+        const from = Math.max(0, at - 40);
+        const snippet = (from ? "…" : "") + m.body.slice(from, from + 160) + (m.body.length > from + 160 ? "…" : "");
+        add(
+          results,
+          h(
+            "button",
+            {
+              class: "search-row",
+              type: "button",
+              role: "listitem",
+              onclick: () => {
+                sheet.close();
+                void jumpTo(m.id);
+              },
+            },
+            h("span", { class: "pin-row-who" }, `${isMine(m) ? "You" : m.author_name || memberName(m.author_id)} · ${dayLabel(m.created_at)} ${timeLabel(m.created_at)}`),
+            h("span", { class: "pin-row-text" }, highlighted(snippet, q)),
+          ),
+        );
+      }
+    } catch (e) {
+      if (my === seq) add(results, h("p", { class: "error" }, errMsg(e)));
+    }
+  };
+  input.addEventListener("input", () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void run(), SEARCH_DEBOUNCE_MS);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (timer) clearTimeout(timer);
+      void run();
+    }
+  });
+  add(sheet.body, input, results);
+  setTimeout(() => input.focus(), 50);
 }
 
 function paintPin(): void {
@@ -266,6 +458,7 @@ async function loadInitial(): Promise<void> {
   msgs = p.messages;
   reads = p.reads ?? [];
   pinned = p.pinned ?? [];
+  reactions = p.reactions ?? [];
   olderCursor = p.more ? p.cursor : null;
   lastCursor = msgs.length ? cur(msgs[msgs.length - 1]!) : null;
   addQueuedMessages();
@@ -306,9 +499,10 @@ function afterSent(m: Msg): void {
   scheduleRead();
 }
 
-function localMsg(id: string, body: string, at: number): Msg {
+function localMsg(id: string, body: string, at: number, reply: ReplyRef | null = null): Msg {
   const me = session.me;
   return {
+    reply,
     id,
     author_id: me?.id ?? "",
     author_name: me?.name ?? "",
@@ -326,22 +520,27 @@ function localMsg(id: string, body: string, at: number): Msg {
 function addQueuedMessages(): void {
   for (const e of queuedEntries()) {
     if (e.method !== "POST" || e.path !== "/api/messages") continue;
-    const b = (e.body && typeof e.body === "object" ? e.body : {}) as { id?: unknown; body?: unknown };
+    const b = (e.body && typeof e.body === "object" ? e.body : {}) as { id?: unknown; body?: unknown; reply_to?: unknown };
     const id = String(b.id ?? "");
-    if (id && !msgs.some((m) => m.id === id)) msgs = [...msgs, localMsg(id, String(b.body ?? ""), e.at)];
+    const q = typeof b.reply_to === "string" ? msgs.find((m) => m.id === b.reply_to) : undefined;
+    const ref = typeof b.reply_to === "string" ? (q ? refOf(q) : { id: b.reply_to }) : null;
+    if (id && !msgs.some((m) => m.id === id)) msgs = [...msgs, localMsg(id, String(b.body ?? ""), e.at, ref)];
   }
 }
 
 async function send(text: string): Promise<void> {
   const id = crypto.randomUUID(); // the server stores the row under this id, so the optimistic bubble reconciles by id
+  const rt = replyTo;
   try {
-    const r = await api<{ message: Msg }>("/api/messages", { method: "POST", body: { id, body: text } });
+    const r = await api<{ message: Msg }>("/api/messages", { method: "POST", body: { id, body: text, ...(rt ? { reply_to: rt.id } : {}) } });
+    if (replyTo === rt) setReply(null);
     afterSent(r.message);
   } catch (e) {
     if (!isQueued(e)) throw e;
+    if (replyTo === rt) setReply(null);
     // Offline: show the bubble now with a clock. lastCursor is NOT advanced, so messages from others that
     // arrived meanwhile are still fetched by the next "after" refresh.
-    merge([localMsg(id, text, Date.now())]);
+    merge([localMsg(id, text, Date.now(), rt ? refOf(rt) : null)]);
     render();
     toBottom();
   }
@@ -374,6 +573,8 @@ async function removeMsg(m: Msg): Promise<void> {
     await api("/api/messages/" + m.id, { method: "DELETE" });
     msgs = msgs.filter((x) => x.id !== m.id);
     pinned = pinned.filter((x) => x.id !== m.id);
+    reactions = reactions.filter((r) => r.message_id !== m.id);
+    if (replyTo?.id === m.id) setReply(null);
     paintPin();
     render();
   } catch (e) {
@@ -524,6 +725,33 @@ function openActions(m: Msg): void {
       ),
     );
   add(sheet.body, h("p", { class: "muted act-preview" }, oneLine(preview(m), 140)));
+  if (!m.local) {
+    const myEmoji = reactions.find((r) => r.message_id === m.id && r.member_id === session.me?.id)?.emoji ?? null;
+    add(
+      sheet.body,
+      h(
+        "div",
+        { class: "react-pick", role: "group", "aria-label": "React" },
+        REACTIONS.map((e) =>
+          h(
+            "button",
+            {
+              class: "react-opt" + (e === myEmoji ? " on" : ""),
+              type: "button",
+              "aria-label": (e === myEmoji ? "Remove reaction " : "React ") + e,
+              "aria-pressed": String(e === myEmoji),
+              onclick: () => {
+                sheet.close();
+                void react(m, e === myEmoji ? null : e);
+              },
+            },
+            e,
+          ),
+        ),
+      ),
+    );
+    act("↩ Reply", () => setReply(m));
+  }
   if (m.body) {
     act("\u{1F6D2} Add to shopping list", () => openAddToList(m));
     if (isParent()) act("✅ Make a task", () => openMakeTask(m));
@@ -570,7 +798,9 @@ function openPinnedSheet(): void {
 
 // ---------- sending media ----------
 async function postMedia(body: Record<string, unknown>): Promise<void> {
-  const r = await api<{ message: Msg }>("/api/messages", { method: "POST", body });
+  const rt = replyTo;
+  const r = await api<{ message: Msg }>("/api/messages", { method: "POST", body: rt ? { ...body, reply_to: rt.id } : body });
+  if (replyTo === rt) setReply(null);
   afterSent(r.message);
 }
 
@@ -693,6 +923,8 @@ export function mount(el: HTMLElement): () => void {
   msgs = [];
   reads = [];
   pinned = [];
+  reactions = [];
+  replyTo = null;
   pending = [];
   mediaEls.clear();
   olderCursor = null;
@@ -711,6 +943,9 @@ export function mount(el: HTMLElement): () => void {
   pinBar = h("button", { class: "pin-bar", type: "button", hidden: true, "aria-label": "Pinned messages", onclick: openPinnedSheet });
 
   const ta = h("textarea", { class: "input composer-in", rows: 1, maxLength: 2000, placeholder: "Message…", "aria-label": "Message", enterKeyHint: "send" });
+  composer = ta;
+  replyBar = h("div", { class: "reply-bar", hidden: true });
+  const searchBtn = h("button", { class: "btn small search-btn", type: "button", "aria-label": "Search messages", onclick: openSearch }, "\u{1F50D}");
   const sendBtn = h("button", { class: "btn primary send", type: "submit", disabled: true, "aria-label": "Send" }, "Send ➤");
   const micBtn = h("button", { class: "btn mic", type: "button", "aria-label": "Record voice note", hidden: true }, "\u{1F3A4}");
   const camBtn = h("button", { class: "btn cam", type: "button", "aria-label": "Send a photo" }, "\u{1F4F7}");
@@ -933,7 +1168,9 @@ export function mount(el: HTMLElement): () => void {
   sync();
   unsubNet = onNetworkChange(sync);
   unsubOutbox = onOutboxChange(() => render());
-  el.replaceChildren(h("div", { class: "view chat" }, pinBar, h("div", { class: "msgs-wrap" }, msgsEl, pillEl), typingEl, form, recBar));
+  el.replaceChildren(
+    h("div", { class: "view chat" }, h("div", { class: "chat-top" }, pinBar, searchBtn), h("div", { class: "msgs-wrap" }, msgsEl, pillEl), typingEl, replyBar, form, recBar),
+  );
   void loadInitial().catch((e) => toast(errMsg(e), true));
 
   return () => {
@@ -961,6 +1198,9 @@ export function mount(el: HTMLElement): () => void {
     for (const t of typers.values()) clearTimeout(t);
     typers.clear();
     msgsEl = typingEl = pillEl = pinBar = null;
+    replyBar = null;
+    composer = null;
+    replyTo = null;
     el.replaceChildren();
   };
 }

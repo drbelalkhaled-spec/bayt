@@ -10,6 +10,10 @@ const MAX_BODY = 2000;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const RETENTION_MS = 90 * 86_400_000;
+const MAX_QUERY = 100;
+const SEARCH_LIMIT = 30;
+/** The quick reactions offered in the app; anything else is refused. */
+export const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
 interface MessageRow {
   id: string;
@@ -22,11 +26,19 @@ interface MessageRow {
   media_meta: string | null;
   pinned_at: number | null;
   pinned_by: string | null;
+  reply_to?: string | null;
+  reply_author_id?: string | null;
+  reply_author_name?: string | null;
+  reply_body?: string | null;
+  reply_kind?: string | null;
 }
 
 const SELECT = `SELECT m.id, m.author_id, COALESCE(a.name, '') AS author_name, m.body, m.created_at,
-  m.kind, m.media_key, m.media_meta, m.pinned_at, m.pinned_by
-  FROM messages m LEFT JOIN members a ON a.id = m.author_id`;
+  m.kind, m.media_key, m.media_meta, m.pinned_at, m.pinned_by,
+  m.reply_to, r.author_id AS reply_author_id, COALESCE(ra.name, '') AS reply_author_name,
+  substr(r.body, 1, 140) AS reply_body, r.kind AS reply_kind
+  FROM messages m LEFT JOIN members a ON a.id = m.author_id
+  LEFT JOIN messages r ON r.id = m.reply_to LEFT JOIN members ra ON ra.id = r.author_id`;
 
 function parseMeta(raw: string | null): Record<string, number> | null {
   if (!raw) return null;
@@ -38,10 +50,15 @@ function parseMeta(raw: string | null): Record<string, number> | null {
   }
 }
 
-/** Public shape of a message (media_meta parsed, pinned_by dropped). */
+/** Public shape of a message (media_meta parsed, pinned_by dropped, the quoted message folded into `reply`). */
 function shape(m: MessageRow) {
-  const { pinned_by: _pb, media_meta, ...rest } = m;
-  return { ...rest, media_meta: parseMeta(media_meta) };
+  const { pinned_by: _pb, media_meta, reply_to, reply_author_id, reply_author_name, reply_body, reply_kind, ...rest } = m;
+  const reply = !reply_to
+    ? null
+    : reply_kind
+      ? { id: reply_to, author_id: reply_author_id ?? "", author_name: reply_author_name ?? "", body: reply_body ?? "", kind: reply_kind }
+      : { id: reply_to, deleted: true };
+  return { ...rest, media_meta: parseMeta(media_meta), reply };
 }
 
 async function extras(db: D1Database, meId: string) {
@@ -63,7 +80,12 @@ async function extras(db: D1Database, meId: string) {
       )
       .all<MessageRow & { pinned_by_name: string }>()
   ).results.map((m) => ({ ...shape(m), pinned_by_name: m.pinned_by_name }));
-  return { reads, pinned };
+  const reactions = (
+    await db
+      .prepare("SELECT message_id, member_id, emoji FROM message_reactions ORDER BY created_at ASC, member_id ASC LIMIT 2000")
+      .all<{ message_id: string; member_id: string; emoji: string }>()
+  ).results;
+  return { reads, pinned, reactions };
 }
 
 const cursorOf = (m: MessageRow) => `${m.created_at}:${m.id}`;
@@ -143,6 +165,19 @@ messages.get("/messages", async (c) => {
   });
 });
 
+/** Newest text matches first. Case-insensitive for Latin letters (SQLite LIKE). */
+messages.get("/messages/search", async (c) => {
+  const q = (c.req.query("q") ?? "").trim();
+  if (q.length < 2 || q.length > MAX_QUERY) return fail(c, "bad_query", 400);
+  const like = "%" + q.replace(/[\\%_]/g, (ch) => "\\" + ch) + "%";
+  const { results } = await c.env.DB.prepare(
+    `${SELECT} WHERE m.body LIKE ?1 ESCAPE '\\' ORDER BY m.created_at DESC, m.id DESC LIMIT ?2`,
+  )
+    .bind(like, SEARCH_LIMIT)
+    .all<MessageRow>();
+  return c.json({ messages: results.map(shape) });
+});
+
 const META_KEYS: Record<"photo" | "voice", string[]> = { photo: ["w", "h"], voice: ["durationMs"] };
 
 /** Returns the cleaned meta object (or null when empty) or undefined when invalid. */
@@ -176,6 +211,12 @@ messages.post("/messages", async (c) => {
   }
   const body = typeof b.body === "string" ? b.body.trim() : "";
   if (body.length > MAX_BODY) return fail(c, "bad_body", 400);
+  let replyTo: string | null = null;
+  if (b.reply_to !== undefined && b.reply_to !== null) {
+    if (typeof b.reply_to !== "string" || !b.reply_to || b.reply_to.length > 64) return fail(c, "bad_reply", 400);
+    // A quoted message deleted meanwhile (e.g. an offline reply sent late) still sends; it shows as deleted.
+    replyTo = b.reply_to;
+  }
   let mediaKey: string | null = null;
   let meta: Record<string, number> | null = null;
   if (kind === "text") {
@@ -194,23 +235,13 @@ messages.post("/messages", async (c) => {
     if (!(await attachMedia(c.env, b.media_key, me.id))) return fail(c, "bad_media", 400);
     mediaKey = b.media_key;
   }
-  const message: MessageRow = {
-    id: cid ?? newId(),
-    author_id: me.id,
-    author_name: me.name,
-    body,
-    created_at: now(),
-    kind,
-    media_key: mediaKey,
-    media_meta: meta ? JSON.stringify(meta) : null,
-    pinned_at: null,
-    pinned_by: null,
-  };
+  const id = cid ?? newId();
   await c.env.DB.prepare(
-    "INSERT INTO messages(id, author_id, body, created_at, kind, media_key, media_meta) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    "INSERT INTO messages(id, author_id, body, created_at, kind, media_key, media_meta, reply_to) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
   )
-    .bind(message.id, me.id, body, message.created_at, kind, mediaKey, message.media_meta)
+    .bind(id, me.id, body, now(), kind, mediaKey, meta ? JSON.stringify(meta) : null, replyTo)
     .run();
+  const message = (await c.env.DB.prepare(`${SELECT} WHERE m.id = ?1`).bind(id).first<MessageRow>())!;
   const { results } = await c.env.DB.prepare("SELECT id FROM members WHERE removed_at IS NULL AND id != ?1")
     .bind(me.id)
     .all<{ id: string }>();
@@ -252,6 +283,42 @@ messages.patch("/messages/:id", async (c) => {
   return c.json({ ok: true, pinned: b.pinned });
 });
 
+messages.put("/messages/:id/reaction", async (c) => {
+  const id = c.req.param("id");
+  const me = c.get("me");
+  const b = await readJson(c);
+  const emoji = b.emoji;
+  if (emoji !== null && (typeof emoji !== "string" || !REACTIONS.includes(emoji))) return fail(c, "bad_emoji", 400);
+  const db = c.env.DB;
+  const msg = await db.prepare("SELECT author_id, body, kind FROM messages WHERE id = ?1").bind(id).first<{
+    author_id: string;
+    body: string;
+    kind: string;
+  }>();
+  if (!msg) return fail(c, "not_found", 404);
+  if (emoji === null) {
+    await db.prepare("DELETE FROM message_reactions WHERE message_id = ?1 AND member_id = ?2").bind(id, me.id).run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO message_reactions(message_id, member_id, emoji, created_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(message_id, member_id) DO UPDATE SET emoji = excluded.emoji, created_at = excluded.created_at`,
+      )
+      .bind(id, me.id, emoji, now())
+      .run();
+  }
+  const what = msg.kind === "photo" ? "your photo" : msg.kind === "voice" ? "your voice note" : `"${msg.body.length > 60 ? msg.body.slice(0, 59) + "…" : msg.body}"`;
+  await emit(
+    c.env,
+    c.executionCtx,
+    "chat",
+    emoji !== null && msg.author_id !== me.id
+      ? { kind: "chat", to: [msg.author_id], actorId: me.id, text: `${me.name} reacted ${emoji} to ${what}` }
+      : undefined,
+  );
+  return c.json({ ok: true, emoji });
+});
+
 messages.delete("/messages/:id", async (c) => {
   const id = c.req.param("id");
   const me = c.get("me");
@@ -260,7 +327,10 @@ messages.delete("/messages/:id", async (c) => {
     .first<{ author_id: string; media_key: string | null }>();
   if (!row) return fail(c, "not_found", 404);
   if (row.author_id !== me.id) return fail(c, "forbidden", 403);
-  await c.env.DB.prepare("DELETE FROM messages WHERE id = ?1 AND author_id = ?2").bind(id, me.id).run();
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM messages WHERE id = ?1 AND author_id = ?2").bind(id, me.id),
+    c.env.DB.prepare("DELETE FROM message_reactions WHERE message_id = ?1").bind(id),
+  ]);
   if (row.media_key) await deleteMedia(c.env, row.media_key).catch((e) => console.error("deleteMedia failed", e));
   await emit(c.env, c.executionCtx, "chat");
   return c.json({ ok: true });
@@ -268,7 +338,10 @@ messages.delete("/messages/:id", async (c) => {
 
 /** Retention deletes for runCleanup: [sql, ...bindings]. */
 export function retention(now: number): [string, ...unknown[]][] {
-  return [["DELETE FROM messages WHERE created_at < ?1", now - RETENTION_MS]];
+  return [
+    ["DELETE FROM messages WHERE created_at < ?1", now - RETENTION_MS],
+    ["DELETE FROM message_reactions WHERE message_id NOT IN (SELECT id FROM messages)"],
+  ];
 }
 
 export default messages;
