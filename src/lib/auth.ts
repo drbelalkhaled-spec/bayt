@@ -6,6 +6,12 @@ import { sha256hex } from "./util";
 /** Seat cap for the household. */
 export const MAX_MEMBERS = 3;
 
+/** The cap in force: MAX_MEMBERS unless the environment raises it (local dev test accounts). */
+export function maxMembers(env: Pick<Env, "MAX_MEMBERS">): number {
+  const n = Number(env.MAX_MEMBERS);
+  return Number.isInteger(n) && n >= 1 && n <= 10 ? n : MAX_MEMBERS;
+}
+
 export type Role = "parent" | "nanny";
 export interface Member {
   id: string;

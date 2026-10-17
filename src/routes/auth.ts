@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { MAX_MEMBERS, publicMember, requireMember, requireParent, type AppEnv, type Member } from "../lib/auth";
+import { maxMembers, publicMember, requireMember, requireParent, type AppEnv, type Member } from "../lib/auth";
 import { emit, kick } from "../lib/events";
 import { rateClear, rateFail, rateLimited } from "../lib/ratelimit";
 import { badName, cleanName, fail, newId, nameKey, now, randHex, readJson, safeEqual, setTz, sha256hex, validTz, householdTz } from "../lib/util";
@@ -127,7 +127,7 @@ auth.post("/join", async (c) => {
        WHERE i.secret_hash = ?6 AND i.used_by IS NULL AND i.expires_at > ?5
          AND (SELECT COUNT(*) FROM members WHERE removed_at IS NULL) < ?7
          AND NOT EXISTS (SELECT 1 FROM members WHERE removed_at IS NULL AND name_key = ?3)`,
-    ).bind(id, name, nk, await sha256hex(token), t, secretHash, MAX_MEMBERS),
+    ).bind(id, name, nk, await sha256hex(token), t, secretHash, maxMembers(c.env)),
     c.env.DB.prepare(
       `UPDATE invites SET used_by = ?1, used_at = ?2
        WHERE secret_hash = ?3 AND used_by IS NULL AND expires_at > ?2
@@ -140,7 +140,7 @@ auth.post("/join", async (c) => {
       .bind(nk)
       .first();
     if (dup) return fail(c, "name_taken", 409);
-    if ((await activeCount(c.env.DB)) >= MAX_MEMBERS) return fail(c, "household_full", 409);
+    if ((await activeCount(c.env.DB)) >= maxMembers(c.env)) return fail(c, "household_full", 409);
     return fail(c, "bad_invite", 404);
   }
   await rateClear(c.env, key);

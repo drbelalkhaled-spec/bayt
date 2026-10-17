@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { maxMembers } from "../src/lib/auth";
 import { api, makeHousehold, resetDb, setupFirst } from "./helpers";
 
 beforeEach(resetDb);
@@ -90,6 +91,12 @@ describe("invites and join", () => {
     await env.DB.prepare("UPDATE invites SET expires_at = ?1").bind(Date.now() - 1000).run();
     expect((await api("/api/invites/peek?s=" + inv.json.secret)).status).toBe(404);
     expect((await api("/api/join", { body: { secret: inv.json.secret } })).status).toBe(404);
+  });
+
+  it("seat cap override only accepts sane values", () => {
+    expect(maxMembers({})).toBe(3);
+    expect(maxMembers({ MAX_MEMBERS: "6" })).toBe(6);
+    for (const v of ["0", "11", "2.5", "abc", ""]) expect(maxMembers({ MAX_MEMBERS: v })).toBe(3);
   });
 
   it("rejects the 4th member and leaves the invite unused", async () => {

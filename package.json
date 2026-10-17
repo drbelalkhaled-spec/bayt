@@ -7,7 +7,8 @@
     "build": "vite build",
     "test": "vitest run",
     "deploy": "vite build && wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev:invite": "node tools/dev-invite.mjs"
   },
   "dependencies": {
     "hono": "^4.13.13"

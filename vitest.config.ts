@@ -9,7 +9,7 @@ export default defineConfig(async () => {
       cloudflareTest({
         wrangler: { configPath: "./wrangler.jsonc" },
         miniflare: {
-          bindings: { SETUP_CODE: "test-setup", TEST_MIGRATIONS: migrations },
+          bindings: { SETUP_CODE: "test-setup", MAX_MEMBERS: "3", TEST_MIGRATIONS: migrations },
         },
       }),
     ],

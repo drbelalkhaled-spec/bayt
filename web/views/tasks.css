@@ -16,6 +16,7 @@
 .cant-btn:active { background: rgba(244, 166, 184, .15); }
 .task-actions .ok-btn { color: var(--chalk-blue); border-color: var(--chalk-blue); }
 .ok-btn:active { background: rgba(159, 211, 230, .15); }
+.card.task .posted { color: var(--chalk-faint); font-size: 13px; margin-block-start: 2px; }
 .chip.seen { color: var(--chalk-blue); border-color: var(--chalk-blue); }
 .chip.unseen { border-style: dashed; }
 .card.task.is-blocked { border-color: var(--chalk-pink); }

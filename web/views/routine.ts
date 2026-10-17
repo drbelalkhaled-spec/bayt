@@ -26,6 +26,7 @@ export interface Task {
   seen_by: string | null;
   seen_by_name: string | null;
   created_by: string;
+  created_by_name: string | null;
   created_at: number;
   done_by: string | null;
   done_by_name: string | null;

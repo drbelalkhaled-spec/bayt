@@ -51,6 +51,19 @@ const errMsg = (e: unknown): string => {
   return "Something went wrong";
 };
 
+/** When a task was posted, in the chat's clock style: "Today 10:32 AM", "Yesterday …", "12 Oct, …". */
+function postedLabel(ms: number): string {
+  const d = new Date(ms);
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const day = (x: Date): string => x.toDateString();
+  const now = new Date();
+  const yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  if (day(d) === day(now)) return "Today " + time;
+  if (day(d) === day(yest)) return "Yesterday " + time;
+  const date = d.toLocaleDateString(undefined, { day: "numeric", month: "short", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) });
+  return date + ", " + time;
+}
+
 function dueInfo(due: string): { label: string; overdue: boolean } {
   const today = todayStr();
   if (due < today) return { label: "Overdue", overdue: true };
@@ -260,6 +273,7 @@ function openCard(t: Task): HTMLElement {
         : null,
     },
     h("div", { class: "t-title" }, t.title),
+    h("div", { class: "posted" }, postedLabel(t.created_at) + " · " + who(t.created_by, t.created_by_name)),
     t.note ? h("div", { class: "note" }, t.note) : null,
     meta,
     blocked,
