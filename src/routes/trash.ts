@@ -81,8 +81,19 @@ trash.delete("/trash/:id", requireMember, async (c) => {
   const me = c.get("me");
   const t = await entry(c.env.DB, c.req.param("id"));
   if (!t || !canSeeTrash(t, me)) return fail(c, "not_found", 404);
-  await c.env.DB.prepare("DELETE FROM trash WHERE id = ?1").bind(t.id).run();
-  if (t.media_key) await deleteMedia(c.env, t.media_key).catch((e) => console.error("deleteMedia failed", e));
+  const db = c.env.DB;
+  await db.prepare("DELETE FROM trash WHERE id = ?1").bind(t.id).run();
+  // Remove the file now only if nothing else still uses it (otherwise the daily cleanup decides later).
+  if (t.media_key) {
+    const used = await db
+      .prepare(
+        `SELECT 1 FROM items WHERE photo_key = ?1 UNION ALL SELECT 1 FROM tasks WHERE done_photo_key = ?1
+         UNION ALL SELECT 1 FROM messages WHERE media_key = ?1 UNION ALL SELECT 1 FROM trash WHERE media_key = ?1 LIMIT 1`,
+      )
+      .bind(t.media_key)
+      .first();
+    if (!used) await deleteMedia(c.env, t.media_key).catch((e) => console.error("deleteMedia failed", e));
+  }
   return c.json({ ok: true });
 });
 

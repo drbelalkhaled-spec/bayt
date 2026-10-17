@@ -160,6 +160,22 @@ describe("trash", () => {
     expect((await get(dad)).status).toBe(200);
   });
 
+  it("one photo belongs to one row: reuse is refused, so purging the trash cannot break a live item", async () => {
+    const up = await SELF.fetch("http://x/api/media", {
+      method: "POST",
+      headers: { authorization: `Bearer ${dad.token}`, "content-type": "image/png" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+    const key = ((await up.json()) as any).key;
+    const a = (await addItem(dad, { name: "Soap", photo_key: key })).json.item;
+    expect((await addItem(dad, { name: "Sponge", photo_key: key })).status).toBe(400);
+    const b = (await addItem(dad, { name: "Bleach" })).json.item;
+    expect((await patchItem(dad, b.id, { photo_key: key })).status).toBe(400);
+    const d = await api(`/api/items/${a.id}`, { method: "DELETE", token: dad.token });
+    expect((await api(`/api/trash/${d.json.trash_id}`, { method: "DELETE", token: dad.token })).status).toBe(200);
+    expect(await env.MEDIA.get(key)).toBeNull(); // nothing else used it, so it is gone now
+  });
+
   it("expires after 24 hours", async () => {
     const it = (await addItem(dad, { name: "Old thing" })).json.item;
     const d = await api(`/api/items/${it.id}`, { method: "DELETE", token: dad.token });
