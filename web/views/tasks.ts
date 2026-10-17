@@ -65,16 +65,23 @@ const canTick = (t: Task): boolean => isParent() || !t.assignee_id || t.assignee
 const canUndo = (t: Task): boolean => isParent() || t.done_by === meId();
 const canBlock = (t: Task): boolean => !t.blocked_at && (!t.assignee_id || t.assignee_id === meId());
 const canPhoto = (t: Task): boolean => isParent() || t.done_by === meId();
+/** "OK, I'll do it" is the helper's acknowledgement: offered on her own tasks and on "Anyone" tasks (parents only on their own). */
+const canSee = (t: Task): boolean => !t.seen_at && (t.assignee_id ? t.assignee_id === meId() : !isParent());
 
 const WAIT_CHIP = (): HTMLElement => h("span", { class: "chip sync-wait" }, "⏳ waiting to sync");
 
-/** Re-apply "done" changes still waiting in the outbox so server/cached data does not undo them on screen. */
+/** Re-apply "done"/"seen" changes still waiting in the outbox so server/cached data does not undo them on screen. */
 function overlay(o: Task[], d: Task[]): [Task[], Task[]] {
   const me = session.me;
   for (const e of queuedEntries()) {
     if (e.method !== "PATCH" || !e.path.startsWith("/api/tasks/")) continue;
     const id = decodeURIComponent(e.path.split("/").pop() ?? "");
-    const v = (e.body as { done?: unknown } | null)?.done;
+    const body = e.body as { done?: unknown; seen?: unknown } | null;
+    if (body?.seen === true) {
+      o = o.map((x) => (x.id === id && !x.seen_at ? { ...x, seen_at: e.at, seen_by: me?.id ?? null, seen_by_name: me?.name ?? null } : x));
+      continue;
+    }
+    const v = body?.done;
     if (typeof v !== "boolean") continue;
     if (v) {
       const t = o.find((x) => x.id === id);
@@ -205,6 +212,11 @@ function openCard(t: Task): HTMLElement {
     h("span", { class: "chip" }, t.assignee_name || "Anyone"),
     due ? h("span", { class: "chip" + (due.overdue ? " overdue" : "") }, due.label + (t.due_time ? " · " + t.due_time : "")) : null,
     t.recur ? recurChip(t.recur) : null,
+    t.seen_at
+      ? h("span", { class: "chip seen", title: timeAgo(t.seen_at) }, "✓ Will do" + (t.seen_by && t.seen_by !== meId() && t.seen_by_name ? " · " + t.seen_by_name : ""))
+      : parent && t.assignee_id !== meId()
+        ? h("span", { class: "chip unseen" }, "Waiting for OK")
+        : null,
     waiting.has(t.id) ? WAIT_CHIP() : null,
   );
   const blocked = t.blocked_at
@@ -251,6 +263,8 @@ function openCard(t: Task): HTMLElement {
     blocked,
   );
   const actions = h("div", { class: "task-actions" });
+  if (canSee(t))
+    add(actions, h("button", { class: "done-btn ok-btn", type: "button", "aria-label": "OK, I'll do it: " + t.title, onclick: () => void setSeen(t.id) }, "✓", h("span", null, "OK, I'll do it")));
   if (canTick(t))
     add(actions, h("button", { class: "done-btn", type: "button", "aria-label": "Mark done: " + t.title, onclick: () => void setDone(t.id, true) }, "✓", h("span", null, "Done")));
   if (canBlock(t))
@@ -354,6 +368,29 @@ async function setDone(id: string, value: boolean, routine = false): Promise<voi
     reconcile();
   }
   if (ok && value && !routine) toast("Done ✓", { action: { label: "📷 Add photo", run: () => void addPhoto(id) }, ms: 6000 });
+}
+
+async function setSeen(id: string): Promise<void> {
+  const t = open.find((x) => x.id === id);
+  if (!t || t.seen_at) return;
+  const snap = open;
+  const me = session.me;
+  open = open.map((x) => (x.id === id ? { ...x, seen_at: Date.now(), seen_by: me?.id ?? null, seen_by_name: me?.name ?? null } : x));
+  render();
+  pending++;
+  try {
+    await api("/api/tasks/" + id, { method: "PATCH", body: { seen: true } });
+  } catch (e) {
+    if (isQueued(e)) render();
+    else {
+      open = snap;
+      render();
+      toast(errMsg(e), true);
+    }
+  } finally {
+    pending--;
+    reconcile();
+  }
 }
 
 async function addPhoto(id: string): Promise<void> {

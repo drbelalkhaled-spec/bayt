@@ -157,7 +157,7 @@ items.post("/items", requireMember, async (c) => {
   const others = (
     await c.env.DB.prepare("SELECT id FROM members WHERE removed_at IS NULL AND id != ?1").bind(me.id).all<{ id: string }>()
   ).results.map((r) => r.id);
-  await emit(c.env, c.executionCtx, "list", { kind: "item", to: others, actorId: me.id });
+  await emit(c.env, c.executionCtx, "list", { kind: "item", to: others, actorId: me.id, text: `${me.name} added ${name} to the list` });
   return c.json({ item: await getItem(c, id) });
 });
 

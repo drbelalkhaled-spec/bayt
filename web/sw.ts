@@ -133,6 +133,7 @@ function routeFor(kind?: string): string {
     case "chat":
       return "/#/chat";
     case "task_new":
+    case "task_seen":
     case "task_done":
     case "task_blocked":
     case "reminder":

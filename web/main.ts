@@ -4,7 +4,7 @@ import { initInstall } from "./lib/install";
 import { onEvent, onRemoved, startLive, stopLive } from "./lib/live";
 import type { LiveEvent } from "./lib/live";
 import { clearOutbox, flushOutbox, isSyncing, onOutboxChange, onOutboxSynced, pendingCount } from "./lib/outbox";
-import { current, startRouter } from "./lib/router";
+import { ROUTES, startRouter } from "./lib/router";
 import type { Route } from "./lib/router";
 import { clearSession, isParent, loadSession, session } from "./lib/session";
 import { kvGet, kvSet } from "./lib/store";
@@ -27,13 +27,53 @@ const TABS: { route: Route; label: string; ico: string }[] = [
 const app = document.getElementById("app") as HTMLElement;
 let unmountView: (() => void) | null = null;
 let activeRoute: Route | null = null;
-let unread = 0;
 let unsub: (() => void) | null = null;
 let signingOut = false;
 let main: HTMLElement | null = null;
-let badge: HTMLElement | null = null;
 let offlineBar: HTMLElement | null = null;
 const tabEls = new Map<Route, HTMLElement>();
+
+// Tab badges: how many things others added or changed since this tab was last open.
+const counts: Record<Route, number> = { list: 0, tasks: 0, chat: 0 };
+const badges = new Map<Route, HTMLElement>();
+const COUNT_KEY: Record<Route, string> = { list: "listUnread", tasks: "tasksUnread", chat: "unread" };
+const SEEN_KEY: Record<Route, string> = { list: "listSeenAt", tasks: "tasksSeenAt", chat: "chatSeenAt" };
+const BADGE_LABEL: Record<Route, string> = { list: "New items", tasks: "New or updated tasks", chat: "Unread messages" };
+
+interface TaskLite {
+  assignee_id: string | null;
+  created_by: string;
+  created_at: number;
+  done_by: string | null;
+  done_at: number | null;
+  blocked_by: string | null;
+  blocked_at: number | null;
+  seen_by: string | null;
+  seen_at: number | null;
+}
+
+/** Count what others did after `since`. Read receipts, ticks and edits also emit events, so we recount rather than add 1. */
+const COUNTERS: Record<Route, (since: number, meId: string | undefined) => Promise<number>> = {
+  chat: async (since, meId) => {
+    const { messages } = await api<{ messages: { author_id: string; created_at: number }[] }>("/api/messages?limit=100");
+    return messages.filter((m) => m.author_id !== meId && m.created_at > since).length;
+  },
+  list: async (since, meId) => {
+    const { items } = await api<{ items: { added_by: string; added_at: number; bought_at: number | null }[] }>("/api/items");
+    return items.filter((i) => !i.bought_at && i.added_by !== meId && i.added_at > since).length;
+  },
+  tasks: async (since, meId) => {
+    const { open, done } = await api<{ open: TaskLite[]; done: TaskLite[] }>("/api/tasks");
+    const parent = isParent();
+    // Everyone: new tasks for them. Parents also: tasks others saw, finished or got stuck on.
+    const isNew = (t: TaskLite) =>
+      t.created_by !== meId && t.created_at > since && (parent || t.assignee_id === null || t.assignee_id === meId);
+    const blocked = (t: TaskLite) => parent && !!t.blocked_at && t.blocked_at > since && t.blocked_by !== meId;
+    const seen = (t: TaskLite) => parent && !!t.seen_at && t.seen_at > since && t.seen_by !== meId;
+    const finished = (t: TaskLite) => parent && !!t.done_at && t.done_at > since && t.done_by !== meId;
+    return open.filter((t) => isNew(t) || blocked(t) || seen(t)).length + done.filter(finished).length;
+  },
+};
 
 async function signOut(): Promise<void> {
   if (signingOut) return;
@@ -50,9 +90,11 @@ async function signOut(): Promise<void> {
   void window.caches?.delete("bayt-media").catch(() => undefined);
   await clearToken();
   clearSession();
-  unread = 0;
-  await kvSet("unread", 0).catch(() => undefined);
-  await kvSet("chatSeenAt", 0).catch(() => undefined);
+  for (const r of ROUTES) {
+    counts[r] = 0;
+    await kvSet(COUNT_KEY[r], 0).catch(() => undefined);
+    await kvSet(SEEN_KEY[r], undefined).catch(() => undefined);
+  }
   signingOut = false;
   await boot();
 }
@@ -71,22 +113,58 @@ function paintOffline(): void {
   offlineBar.classList.toggle("syncing", !off && !!text);
 }
 
-function paintBadge(): void {
-  if (!badge) return;
-  badge.hidden = unread <= 0;
-  badge.textContent = unread > 99 ? "99+" : String(unread);
+function paintBadges(): void {
+  for (const [r, el] of badges) {
+    el.hidden = counts[r] <= 0;
+    el.textContent = counts[r] > 99 ? "99+" : String(counts[r]);
+  }
+  // Home-screen icon dot/number where supported (installed PWA on Android/desktop).
+  const total = ROUTES.reduce((n, r) => n + counts[r], 0);
+  const nav = navigator as Navigator & { setAppBadge?: (n?: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+  void (total ? nav.setAppBadge?.(total) : nav.clearAppBadge?.())?.catch(() => undefined);
 }
 
-function setUnread(n: number): void {
-  unread = n;
-  paintBadge();
-  void kvSet("unread", n).catch(() => undefined);
+function setCount(r: Route, n: number): void {
+  counts[r] = n;
+  paintBadges();
+  void kvSet(COUNT_KEY[r], n).catch(() => undefined);
+}
+
+/** Remember when a tab was last looked at, so its badge counts only newer things from others. */
+function markSeen(r: Route): void {
+  setCount(r, 0);
+  void kvSet(SEEN_KEY[r], Date.now()).catch(() => undefined);
+}
+
+/** First run (or just joined): start counting from now, not from the whole history. */
+async function seenAt(r: Route): Promise<number> {
+  const v = await kvGet<number>(SEEN_KEY[r]).catch(() => undefined);
+  if (typeof v === "number") return v;
+  const t = Date.now();
+  await kvSet(SEEN_KEY[r], t).catch(() => undefined);
+  return t;
+}
+
+async function recount(r: Route): Promise<void> {
+  try {
+    const n = await COUNTERS[r](await seenAt(r), session.me?.id);
+    if (activeRoute === r) return;
+    setCount(r, n);
+  } catch {
+    /* offline or signed out: keep the current badge */
+  }
+}
+
+function recountOthers(): void {
+  for (const r of ROUTES) if (r !== activeRoute) void recount(r);
 }
 
 function showRoute(r: Route): void {
   if (!main) return;
   closeAllSheets();
   unmountView?.();
+  // Things that arrived while the old tab was open were seen there.
+  if (activeRoute && activeRoute !== r) markSeen(activeRoute);
   activeRoute = r;
   unmountView = views[r].mount(main);
   main.scrollTop = 0;
@@ -94,32 +172,14 @@ function showRoute(r: Route): void {
     if (route === r) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   }
-  if (r === "chat") markChatSeen();
-}
-
-/** Remember when chat was last open, so the badge counts only newer messages from others. */
-function markChatSeen(): void {
-  setUnread(0);
-  void kvSet("chatSeenAt", Date.now()).catch(() => undefined);
-}
-
-/** Recount unread chat messages: read receipts and pins also emit "chat", so we can't just add 1. */
-async function recountUnread(): Promise<void> {
-  try {
-    const seenAt = (await kvGet<number>("chatSeenAt").catch(() => 0)) || 0;
-    const { messages } = await api<{ messages: { author_id: string; created_at: number }[] }>("/api/messages?limit=100");
-    const meId = session.me?.id;
-    if (activeRoute === "chat") return;
-    setUnread(messages.filter((m) => m.author_id !== meId && m.created_at > seenAt).length);
-  } catch {
-    /* offline or signed out: keep the current badge */
-  }
+  markSeen(r);
 }
 
 function onLive(e: LiveEvent): void {
   if (e.type === "poll") {
     void loadSession().catch(() => undefined);
     if (activeRoute) void views[activeRoute].refresh().catch(() => undefined);
+    recountOthers();
     return;
   }
   if (e.type !== "changed") return;
@@ -127,22 +187,24 @@ function onLive(e: LiveEvent): void {
     void loadSession().catch(() => undefined);
     return;
   }
-  if (e.scope === "chat" && activeRoute !== "chat") void recountUnread();
   if (e.scope === activeRoute) void views[e.scope].refresh().catch(() => undefined);
+  else void recount(e.scope);
 }
 
 function buildFrame(): void {
   main = h("main", { class: "main", id: "main" });
   offlineBar = h("div", { class: "offline-bar", role: "status", "aria-live": "polite", hidden: true });
-  badge = h("span", { class: "badge", hidden: true, "aria-label": "Unread messages" });
+  badges.clear();
   tabEls.clear();
   const tabs = TABS.map((t) => {
+    const badge = h("span", { class: "badge", hidden: true, "aria-label": BADGE_LABEL[t.route] });
+    badges.set(t.route, badge);
     const el = h(
       "a",
       { class: "tab", href: "#/" + t.route },
       h("span", { class: "ico", "aria-hidden": "true" }, t.ico),
       h("span", null, t.label),
-      t.route === "chat" ? badge : null,
+      badge,
     );
     tabEls.set(t.route, el);
     return el;
@@ -162,17 +224,16 @@ function buildFrame(): void {
       h("nav", { class: "tabbar", "aria-label": "Sections" }, tabs),
     ),
   );
-  paintBadge();
+  paintBadges();
   paintOffline();
 }
 
 async function startApp(): Promise<void> {
-  unread = (await kvGet<number>("unread").catch(() => 0)) || 0;
+  for (const r of ROUTES) counts[r] = (await kvGet<number>(COUNT_KEY[r]).catch(() => 0)) || 0;
   buildFrame();
   unsub = onEvent(onLive);
   startRouter(showRoute);
-  if (current() === "chat") markChatSeen();
-  else void recountUnread();
+  recountOthers();
   startLive();
   void flushOutbox();
 }
@@ -216,7 +277,11 @@ onNetworkChange(paintOffline);
 onOutboxChange(paintOffline);
 onOutboxSynced(() => {
   if (activeRoute) void views[activeRoute].refresh().catch(() => undefined);
-  void recountUnread();
+  recountOthers();
+});
+// Leaving the app counts as having seen the open tab (the next launch may open on another one).
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && activeRoute) markSeen(activeRoute);
 });
 onUnauthorized(() => void signOut());
 onRemoved(() => void signOut());

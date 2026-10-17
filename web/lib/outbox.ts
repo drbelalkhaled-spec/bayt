@@ -41,7 +41,7 @@ export function queueable(method: string, path: string, body: unknown): boolean 
   if (method === "DELETE" && ITEM.test(path)) return true;
   if (method === "PATCH" && TASK.test(path)) {
     const keys = Object.keys(b);
-    return keys.length === 1 && keys[0] === "done" && typeof b.done === "boolean";
+    return keys.length === 1 && ((keys[0] === "done" && typeof b.done === "boolean") || (keys[0] === "seen" && b.seen === true));
   }
   if (method === "POST" && path === "/api/messages") return (b.kind === undefined || b.kind === "text") && isUuid(b.id);
   if (method === "POST" && path === "/api/messages/read") return true;

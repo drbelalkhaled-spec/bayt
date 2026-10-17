@@ -98,6 +98,8 @@ export function defaultText(kind: PushIntent["kind"], actor: string): string {
       return `New message from ${actor}`;
     case "task_new":
       return `${actor} added a new task`;
+    case "task_seen":
+      return `${actor} will do a task`;
     case "task_done":
       return `${actor} finished a task`;
     case "task_blocked":
@@ -157,7 +159,7 @@ export async function deliver(env: Env, intent: PushIntent): Promise<void> {
   const text = intent.text || defaultText(intent.kind, actorName);
   const vapid = await ensureVapid(env);
   const t = now();
-  const throttled = intent.kind === "item" || intent.kind === "shopping" || intent.kind === "chat";
+  const throttled = intent.kind === "item" || intent.kind === "shopping" || intent.kind === "chat" || intent.kind === "task_seen";
   await Promise.all(
     results.map(async (m) => {
       try {

@@ -22,6 +22,9 @@ export interface Task {
   blocked_by: string | null;
   blocked_by_name: string | null;
   blocked_reason: string | null;
+  seen_at: number | null;
+  seen_by: string | null;
+  seen_by_name: string | null;
   created_by: string;
   created_at: number;
   done_by: string | null;

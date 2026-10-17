@@ -45,6 +45,8 @@ interface TaskRow {
   blocked_at: number | null;
   blocked_by: string | null;
   blocked_reason: string | null;
+  seen_at: number | null;
+  seen_by: string | null;
   created_by: string;
   created_at: number;
   done_by: string | null;
@@ -54,12 +56,14 @@ interface TaskRow {
 const SELECT = `SELECT t.id, t.title, t.note, t.assignee_id, a.name AS assignee_name, t.due_on, t.due_time,
     t.remind_at, t.reminded_at, t.recur, t.slot, t.series_id, t.done_photo_key,
     t.blocked_at, t.blocked_by, bb.name AS blocked_by_name, t.blocked_reason,
+    t.seen_at, t.seen_by, sb.name AS seen_by_name,
     t.created_by, cb.name AS created_by_name, t.created_at, t.done_by, db.name AS done_by_name, t.done_at
   FROM tasks t
   LEFT JOIN members a ON a.id = t.assignee_id
   LEFT JOIN members cb ON cb.id = t.created_by
   LEFT JOIN members db ON db.id = t.done_by
-  LEFT JOIN members bb ON bb.id = t.blocked_by`;
+  LEFT JOIN members bb ON bb.id = t.blocked_by
+  LEFT JOIN members sb ON sb.id = t.seen_by`;
 
 /** API shape: recur is returned as an object (or null), not the stored JSON string. */
 const out = (r: Record<string, unknown> | null) => (r ? { ...r, recur: readRecur(r.recur as string | null) } : null);
@@ -71,7 +75,7 @@ const validDate = (v: unknown): v is string | null => v === null || validDateStr
 const validTime = (v: unknown): v is string | null => v === null || validTimeStr(v);
 const validSlot = (v: unknown): v is string | null => v === null || (SLOTS as readonly unknown[]).includes(v);
 const EDIT_KEYS = ["title", "note", "assignee_id", "due_on", "due_time", "recur", "slot"];
-const NANNY_KEYS = new Set(["done", "done_photo_key", "blocked"]);
+const NANNY_KEYS = new Set(["done", "done_photo_key", "blocked", "seen"]);
 
 async function activeMember(db: D1Database, id: unknown): Promise<boolean> {
   if (typeof id !== "string" || !id) return false;
@@ -199,6 +203,7 @@ tasks.patch("/tasks/:id", requireMember, async (c) => {
     if (row.assignee_id && row.assignee_id !== me.id) return fail(c, "forbidden", 403);
   }
   if (b.done !== undefined && typeof b.done !== "boolean") return fail(c, "bad_done", 400);
+  if (b.seen !== undefined && b.seen !== true) return fail(c, "bad_seen", 400);
 
   const t = now();
   const sets: string[] = [];
@@ -276,12 +281,39 @@ tasks.patch("/tasks/:id", requireMember, async (c) => {
     }
   }
 
+  // ---- seen ("OK, I'll do it", before doing it) ----
+  // A parent's real change to what the task says asks the helper to look again.
+  const edited =
+    parent &&
+    ((b.title !== undefined && (b.title as string).trim() !== row.title) ||
+      (b.note !== undefined && (b.note || null) !== row.note) ||
+      (b.assignee_id !== undefined && b.assignee_id !== row.assignee_id) ||
+      due !== row.due_on ||
+      time !== row.due_time);
+  let becameSeen = false;
+  if (b.seen === true) {
+    if (row.assignee_id && row.assignee_id !== me.id) return fail(c, "forbidden", 403);
+    if (row.done_at !== null) return fail(c, "already_done", 400);
+    if (row.seen_at === null || edited) {
+      set("seen_at", t);
+      set("seen_by", me.id);
+      becameSeen = true;
+    }
+  } else if (edited && row.seen_at !== null) {
+    set("seen_at", null);
+    set("seen_by", null);
+  }
+
   // ---- done / undo ----
   let becameDone = false;
   let undone = false;
   if (b.done === true && row.done_at === null) {
     set("done_by", me.id);
     set("done_at", t);
+    if (row.seen_at === null && !becameSeen) {
+      set("seen_at", t);
+      set("seen_by", me.id);
+    }
     becameDone = true;
     clearBlock = true;
   } else if (b.done === false) {
@@ -394,6 +426,9 @@ tasks.patch("/tasks/:id", requireMember, async (c) => {
     const title = b.title !== undefined ? (b.title as string).trim() : row.title;
     if (to.length)
       push = { kind: "task_blocked", to, actorId: me.id, text: `${me.name} couldn't do "${title}": ${blockReason}` };
+  } else if (becameSeen) {
+    const to = await activeIds(db, "parent", me.id);
+    if (to.length) push = { kind: "task_seen", to, actorId: me.id, text: `${me.name} will do "${row.title}"` };
   }
   await emit(c.env, c.executionCtx, "tasks", push);
   if (itemAdded) await emit(c.env, c.executionCtx, "list");
