@@ -5,6 +5,7 @@ import { onEvent } from "../lib/live";
 import { onOutboxChange, queuedEntries, queuedIds } from "../lib/outbox";
 import { isParent, session } from "../lib/session";
 import { kvGet, kvSet } from "../lib/store";
+import { undoToast } from "../lib/trash";
 import { confirmDialog, openSheet, timeAgo, toast } from "../lib/ui";
 import "./views.css";
 import "./tasks.css";
@@ -708,11 +709,12 @@ function openEditor(t: Task | null): void {
     const msg = series ? `Delete "${t.title}" and all its upcoming repeats?` : `Delete "${t.title}"?`;
     if (!(await confirmDialog(msg, "Delete", true))) return;
     try {
-      await api(`/api/tasks/${t.id}${series ? "?series=1" : ""}`, { method: "DELETE" });
+      const r = await api<{ trash_ids?: string[] }>(`/api/tasks/${t.id}${series ? "?series=1" : ""}`, { method: "DELETE" });
       open = open.filter((x) => x.id !== t.id && !(series && (x.series_id ?? x.id) === (t.series_id ?? t.id)));
       render();
       sheet.close();
       reconcile();
+      undoToast(`"${t.title}"`, r.trash_ids, reconcile);
     } catch (ex) {
       toast(errMsg(ex), true);
     }

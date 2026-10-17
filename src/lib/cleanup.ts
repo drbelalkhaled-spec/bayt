@@ -3,6 +3,7 @@ import { retention as errorsRetention } from "../routes/errors";
 import { retention as itemsRetention } from "../routes/items";
 import { retention as messagesRetention } from "../routes/messages";
 import { retention as tasksRetention } from "../routes/tasks";
+import { retention as trashRetention } from "../routes/trash";
 
 const DAY = 86_400_000;
 
@@ -15,6 +16,7 @@ function statements(now: number): [string, ...unknown[]][] {
     ...tasksRetention(now),
     ...messagesRetention(now),
     ...errorsRetention(now),
+    ...trashRetention(now),
   ];
 }
 
@@ -44,6 +46,7 @@ export async function cleanupMedia(env: Env, now = Date.now()): Promise<void> {
        AND key NOT IN (SELECT photo_key FROM items WHERE photo_key IS NOT NULL)
        AND key NOT IN (SELECT done_photo_key FROM tasks WHERE done_photo_key IS NOT NULL)
        AND key NOT IN (SELECT media_key FROM messages WHERE media_key IS NOT NULL)
+       AND key NOT IN (SELECT media_key FROM trash WHERE media_key IS NOT NULL)
      LIMIT 1000`,
   ).all<{ key: string }>();
   await purge(env, orphans.results.map((r) => r.key));

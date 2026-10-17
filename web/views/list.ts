@@ -3,6 +3,7 @@ import { add, clear, h } from "../lib/dom";
 import { compressImage, mediaUrl, pickImage, uploadMedia } from "../lib/media";
 import { onOutboxChange, queuedEntries, queuedIds } from "../lib/outbox";
 import { session } from "../lib/session";
+import { undoToast } from "../lib/trash";
 import { confirmDialog, openSheet, timeAgo, toast } from "../lib/ui";
 import { type StoreMode, openStoreMode } from "./store-mode";
 import "./views.css";
@@ -22,6 +23,8 @@ interface Item {
   bought_by: string | null;
   bought_by_name: string | null;
   bought_at: number | null;
+  /** When it was flagged "needed today" (null = not urgent). */
+  urgent_at: number | null;
 }
 interface Shopping {
   member_id: string;
@@ -98,6 +101,7 @@ function overlay(list: Item[]): Item[] {
           bought_by: null,
           bought_by_name: null,
           bought_at: null,
+          urgent_at: b.urgent === true ? e.at : null,
         });
       }
       continue;
@@ -114,6 +118,8 @@ function overlay(list: Item[]): Item[] {
       if ("qty" in b) n.qty = typeof b.qty === "string" ? b.qty : null;
       if ("note" in b) n.note = typeof b.note === "string" ? b.note : null;
       if (typeof b.category === "string") n.category = b.category;
+      if (b.urgent === true && n.urgent_at === null) n.urgent_at = e.at;
+      else if (b.urgent === false) n.urgent_at = null;
       if (b.bought === true && n.bought_at === null) {
         n.bought_at = e.at;
         n.bought_by = me?.id ?? null;
@@ -130,6 +136,13 @@ function overlay(list: Item[]): Item[] {
 }
 
 const isMine = (s: Shopping | null): boolean => !!s && s.member_id === session.me?.id;
+
+/** "Needed today", or since which day when it was flagged earlier. */
+function neededLabel(at: number): string {
+  const d = new Date(at);
+  if (d.toDateString() === new Date().toDateString()) return "Needed today";
+  return "Needed since " + d.toLocaleDateString(undefined, { weekday: "short" });
+}
 
 function renderBanner(): void {
   if (!bannerEl) return;
@@ -177,10 +190,14 @@ function render(force = false): void {
   }
   renderBanner();
   renderChips();
-  const open = items.filter((i) => i.bought_at === null);
+  const open = items.filter((i) => i.bought_at === null && i.urgent_at === null);
+  const urgent = items.filter((i) => i.bought_at === null && i.urgent_at !== null);
   const bought = items.filter((i) => i.bought_at !== null);
   clear(listEl);
-  if (!open.length) add(listEl, h("div", { class: "empty" }, "Nothing to buy \u{1F389}"));
+  if (urgent.length) {
+    add(listEl, h("h2", { class: "section-h aisle-h needed-h" }, "\u{1F534} Needed today"), h("div", { class: "stack" }, urgent.map(row)));
+  }
+  if (!open.length && !urgent.length) add(listEl, h("div", { class: "empty" }, "Nothing to buy \u{1F389}"));
   else {
     const order = [...categories];
     for (const i of open) if (!order.includes(i.category)) order.push(i.category);
@@ -239,7 +256,7 @@ function row(it: Item): HTMLElement {
   );
   return h(
     "div",
-    { class: "row item" + (done ? " is-done" : "") + (moved.has(it.id) ? " pop" : ""), "data-id": it.id },
+    { class: "row item" + (done ? " is-done" : "") + (!done && it.urgent_at !== null ? " is-needed" : "") + (moved.has(it.id) ? " pop" : ""), "data-id": it.id },
     check,
     h(
       "div",
@@ -255,7 +272,13 @@ function row(it: Item): HTMLElement {
           }
         },
       },
-      h("div", { class: "name" }, it.name, it.qty ? h("span", { class: "pill qty" }, it.qty) : null),
+      h(
+        "div",
+        { class: "name" },
+        it.name,
+        it.qty ? h("span", { class: "pill qty" }, it.qty) : null,
+        !done && it.urgent_at !== null ? h("span", { class: "pill needed" }, neededLabel(it.urgent_at)) : null,
+      ),
       it.note ? h("div", { class: "note" }, it.note) : null,
       h("div", { class: "sub" }, who, waiting.has(it.id) ? h("span", { class: "sync-wait" }, " · ⏳ waiting to sync") : null),
     ),
@@ -453,6 +476,37 @@ function openEdit(it: Item): void {
   }
   drawPhoto();
 
+  // "Needed today": saved straight away, like the photo.
+  let urgentAt = it.urgent_at;
+  const neededBtn = h("button", { class: "btn small needed-btn", type: "button" });
+  const drawNeeded = (): void => {
+    neededBtn.textContent = urgentAt !== null ? "\u{1F534} Needed today · tap to unmark" : "\u{1F534} Mark as needed today";
+    neededBtn.classList.toggle("on", urgentAt !== null);
+    neededBtn.setAttribute("aria-pressed", String(urgentAt !== null));
+  };
+  neededBtn.addEventListener("click", async () => {
+    const want = urgentAt === null;
+    neededBtn.disabled = true;
+    try {
+      const r = await api<{ item: Item }>("/api/items/" + it.id, { method: "PATCH", body: { urgent: want } });
+      items = items.map((i) => (i.id === it.id ? r.item : i));
+      urgentAt = r.item.urgent_at;
+      if (want) toast(shopping && !isMine(shopping) ? `Told ${shopping.name}` : "Told everyone");
+    } catch (ex) {
+      if (!isQueued(ex)) {
+        toast(errMsg(ex), true);
+        neededBtn.disabled = false;
+        return;
+      }
+      urgentAt = want ? Date.now() : null;
+      items = items.map((i) => (i.id === it.id ? { ...i, urgent_at: urgentAt } : i));
+    }
+    render();
+    drawNeeded();
+    neededBtn.disabled = false;
+  });
+  drawNeeded();
+
   const form = h(
     "form",
     {
@@ -489,6 +543,7 @@ function openEdit(it: Item): void {
     h("label", { class: "field" }, h("span", null, "Quantity (optional)"), qty),
     h("label", { class: "field" }, h("span", null, "Note (optional)"), note),
     h("label", { class: "field" }, h("span", null, "Aisle"), cat),
+    h("div", { class: "field" }, h("span", null, "Urgent"), neededBtn),
     h("div", { class: "field" }, h("span", null, "Photo"), photoBox),
     err,
     h(
@@ -502,10 +557,11 @@ function openEdit(it: Item): void {
           onclick: async () => {
             if (!(await confirmDialog(`Delete "${it.name}"?`, "Delete", true))) return;
             try {
-              await api("/api/items/" + it.id, { method: "DELETE" });
+              const r = await api<{ trash_id?: string }>("/api/items/" + it.id, { method: "DELETE" });
               items = items.filter((i) => i.id !== it.id);
               render();
               sheet.close();
+              undoToast(it.name, r.trash_id ? [r.trash_id] : undefined, () => void load().catch(() => undefined));
             } catch (ex) {
               if (isQueued(ex)) {
                 items = items.filter((i) => i.id !== it.id);
@@ -553,6 +609,20 @@ export function mount(el: HTMLElement): () => void {
   datalist = h("datalist", { id: "list-suggest" });
   const addBtn = h("button", { class: "btn primary", type: "submit" }, "Add");
   const camBtn = h("button", { class: "btn cam", type: "button", "aria-label": "Add a photo" }, "\u{1F4F7}");
+  // Tap before adding to send the next item as "needed today".
+  let addUrgent = false;
+  const urgentBtn = h("button", { class: "btn cam urgent-toggle", type: "button", "aria-pressed": "false", "aria-label": "Needed today" }, "\u{1F534}");
+  const syncUrgent = (): void => {
+    urgentBtn.classList.toggle("on", addUrgent);
+    urgentBtn.setAttribute("aria-pressed", String(addUrgent));
+    urgentBtn.title = addUrgent ? "Next item: needed today" : "Mark the next item as needed today";
+    nameIn.placeholder = addUrgent ? "Needed today: add an item…" : "Add an item…";
+  };
+  urgentBtn.addEventListener("click", () => {
+    addUrgent = !addUrgent;
+    syncUrgent();
+    nameIn.focus();
+  });
   const syncCam = (): void => {
     camBtn.classList.toggle("on", !!pendingPhoto);
     camBtn.textContent = pendingPhoto ? "\u{1F4F7}✓" : "\u{1F4F7}";
@@ -589,6 +659,8 @@ export function mount(el: HTMLElement): () => void {
     const body: Record<string, unknown> = { id, name };
     if (qty) body.qty = qty;
     if (photo) body.photo_key = photo;
+    const urgentNow = addUrgent;
+    if (urgentNow) body.urgent = true;
     try {
       const r = await api<{ item: Item; duplicate?: boolean }>("/api/items", { method: "POST", body });
       if (r.duplicate) toast("Already on the list");
@@ -597,11 +669,15 @@ export function mount(el: HTMLElement): () => void {
           items = [r.item, ...items.filter((i) => i.bought_at === null), ...items.filter((i) => i.bought_at !== null)];
         }
         usual = usual.filter((u) => u.toLowerCase() !== name.toLowerCase());
-        toast("Added " + r.item.name);
+        toast((urgentNow ? "Needed today: " : "Added ") + r.item.name);
       }
       if (photo) {
         pendingPhoto = null;
         syncCam();
+      }
+      if (urgentNow) {
+        addUrgent = false;
+        syncUrgent();
       }
       render();
     } catch (ex) {
@@ -620,8 +696,13 @@ export function mount(el: HTMLElement): () => void {
           bought_by: null,
           bought_by_name: null,
           bought_at: null,
+          urgent_at: urgentNow ? Date.now() : null,
         };
         items = [it, ...partition(items)];
+        if (urgentNow) {
+          addUrgent = false;
+          syncUrgent();
+        }
         usual = usual.filter((u) => u.toLowerCase() !== name.toLowerCase());
         if (photo) {
           pendingPhoto = null;
@@ -660,6 +741,7 @@ export function mount(el: HTMLElement): () => void {
     },
     nameIn,
     qtyIn,
+    urgentBtn,
     camBtn,
     addBtn,
     datalist,

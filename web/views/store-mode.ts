@@ -7,6 +7,7 @@ export interface StoreItem {
   note: string | null;
   category: string;
   bought_at: number | null;
+  urgent_at?: number | null;
 }
 
 export interface StoreHooks {
@@ -68,7 +69,13 @@ export function openStoreMode(hooks: StoreHooks): StoreMode {
       h(
         "span",
         { class: "store-text" },
-        h("span", { class: "store-name" }, it.name, it.qty ? h("span", { class: "pill qty" }, it.qty) : null),
+        h(
+          "span",
+          { class: "store-name" },
+          !inCart && it.urgent_at ? h("span", { class: "store-urgent", "aria-label": "Needed today" }, "\u{1F534} ") : null,
+          it.name,
+          it.qty ? h("span", { class: "pill qty" }, it.qty) : null,
+        ),
         it.note ? h("span", { class: "store-note" }, it.note) : null,
         waitSet.has(it.id) ? h("span", { class: "store-note sync-wait" }, "⏳ waiting to sync") : null,
       ),

@@ -5,6 +5,8 @@ import { online } from "../lib/live";
 import { isParent, loadSession, session } from "../lib/session";
 import type { Member } from "../lib/session";
 import { kvGet, kvSet } from "../lib/store";
+import { getTextStyle, setTextStyle, type TextStyle } from "../lib/textstyle";
+import { openTrash } from "../lib/trash";
 import { confirmDialog, openSheet, timeAgo, toast } from "../lib/ui";
 
 export function openSettings(signOut: () => void): void {
@@ -89,10 +91,21 @@ export function openSettings(signOut: () => void): void {
       );
     }
 
+    add(
+      body,
+      h(
+        "div",
+        { class: "row" },
+        h("div", { class: "grow" }, h("div", { class: "title" }, "Recently deleted"), h("div", { class: "sub" }, "Restore list items, tasks or your messages for 24 hours")),
+        h("button", { class: "btn small", type: "button", onclick: () => openTrash() }, "Open"),
+      ),
+    );
+
     if (me.role === "parent") add(body, ...(await problemsSection()));
 
     // Notifications + install
     add(body, h("h3", null, "This device"));
+    add(body, textStyleRow());
     add(body, await notificationsRow());
     if (canInstall()) {
       add(body, 
@@ -315,5 +328,32 @@ function openProblems(list: Problem[]): void {
         "Clear all",
       ),
     ),
+  );
+}
+
+/** Chalkboard handwriting (default) or a plain sans-serif with stronger grey text, for this phone only. */
+function textStyleRow(): HTMLElement {
+  const opts: [TextStyle, string][] = [
+    ["chalk", "Chalkboard"],
+    ["simple", "Simple"],
+  ];
+  const seg = h("div", { class: "seg", role: "group", "aria-label": "Text style" });
+  const paint = (): void => {
+    const cur = getTextStyle();
+    for (const b of Array.from(seg.children)) {
+      const on = (b as HTMLElement).dataset.v === cur;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", String(on));
+    }
+  };
+  for (const [v, label] of opts) {
+    add(seg, h("button", { type: "button", "data-v": v, onclick: () => (setTextStyle(v), paint()) }, label));
+  }
+  paint();
+  return h(
+    "div",
+    { class: "row" },
+    h("div", { class: "grow" }, h("div", { class: "title" }, "Text style"), h("div", { class: "sub" }, "Simple is easier to read in long lists")),
+    seg,
   );
 }

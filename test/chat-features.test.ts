@@ -1,5 +1,6 @@
 import { SELF, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanupMedia, runCleanup } from "../src/lib/cleanup";
 import { api, makeHousehold, resetDb, type TestMember } from "./helpers";
 
 const EP = "https://push.example.test/send/chat";
@@ -107,11 +108,16 @@ describe("voice messages", () => {
 });
 
 describe("delete removes media", () => {
-  it("deletes the R2 object and media row", async () => {
+  it("keeps the photo while the delete can be undone, then removes R2 object and media row", async () => {
     const key = await upload(dad.token, "image/png");
     const m = (await post(dad.token, { kind: "photo", media_key: key })).json.message;
     expect(await env.MEDIA.get(key)).not.toBeNull();
     expect((await api(`/api/messages/${m.id}`, { method: "DELETE", token: dad.token })).status).toBe(200);
+    await cleanupMedia(env);
+    expect(await env.MEDIA.get(key)).not.toBeNull();
+    await env.DB.prepare("UPDATE trash SET deleted_at = ?1").bind(Date.now() - 25 * 3_600_000).run();
+    await runCleanup(env);
+    await cleanupMedia(env);
     expect(await env.MEDIA.get(key)).toBeNull();
     expect(await env.DB.prepare("SELECT key FROM media WHERE key = ?1").bind(key).first()).toBeNull();
   });

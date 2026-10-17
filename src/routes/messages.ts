@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { requireMember, type AppEnv } from "../lib/auth";
 import { emit } from "../lib/events";
-import { attachMedia, deleteMedia } from "../lib/media";
+import { attachMedia } from "../lib/media";
+import { newTrashId, trashStatement } from "../lib/trash";
 import { clientId, fail, newId, now, readJson } from "../lib/util";
 
 const messages = new Hono<AppEnv>();
@@ -11,6 +12,9 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const RETENTION_MS = 90 * 86_400_000;
 const MAX_QUERY = 100;
+/** Your own text messages can be edited for this long after sending. */
+export const EDIT_WINDOW_MS = 15 * 60_000;
+const DAY_MS = 86_400_000;
 const SEARCH_LIMIT = 30;
 /** The quick reactions offered in the app; anything else is refused. */
 export const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
@@ -26,6 +30,7 @@ interface MessageRow {
   media_meta: string | null;
   pinned_at: number | null;
   pinned_by: string | null;
+  edited_at?: number | null;
   reply_to?: string | null;
   reply_author_id?: string | null;
   reply_author_name?: string | null;
@@ -34,7 +39,7 @@ interface MessageRow {
 }
 
 const SELECT = `SELECT m.id, m.author_id, COALESCE(a.name, '') AS author_name, m.body, m.created_at,
-  m.kind, m.media_key, m.media_meta, m.pinned_at, m.pinned_by,
+  m.kind, m.media_key, m.media_meta, m.pinned_at, m.pinned_by, m.edited_at,
   m.reply_to, r.author_id AS reply_author_id, COALESCE(ra.name, '') AS reply_author_name,
   substr(r.body, 1, 140) AS reply_body, r.kind AS reply_kind
   FROM messages m LEFT JOIN members a ON a.id = m.author_id
@@ -85,7 +90,14 @@ async function extras(db: D1Database, meId: string) {
       .prepare("SELECT message_id, member_id, emoji FROM message_reactions ORDER BY created_at ASC, member_id ASC LIMIT 2000")
       .all<{ message_id: string; member_id: string; emoji: string }>()
   ).results;
-  return { reads, pinned, reactions };
+  // Edits change messages the client already has; send recent ones so open chats update.
+  const edits = (
+    await db
+      .prepare("SELECT id, body, edited_at FROM messages WHERE edited_at >= ?1 ORDER BY edited_at ASC LIMIT 200")
+      .bind(now() - DAY_MS)
+      .all<{ id: string; body: string; edited_at: number }>()
+  ).results;
+  return { reads, pinned, reactions, edits };
 }
 
 const cursorOf = (m: MessageRow) => `${m.created_at}:${m.id}`;
@@ -274,6 +286,24 @@ messages.patch("/messages/:id", async (c) => {
   const id = c.req.param("id");
   const me = c.get("me");
   const b = await readJson(c);
+  if (b.body !== undefined) {
+    // Edit: your own text message, within EDIT_WINDOW_MS of sending.
+    if (typeof b.body !== "string") return fail(c, "bad_body", 400);
+    const body = b.body.trim();
+    if (!body || body.length > MAX_BODY) return fail(c, "bad_body", 400);
+    const row = await c.env.DB.prepare("SELECT author_id, kind, body, created_at FROM messages WHERE id = ?1")
+      .bind(id)
+      .first<{ author_id: string; kind: string; body: string; created_at: number }>();
+    if (!row) return fail(c, "not_found", 404);
+    if (row.author_id !== me.id || row.kind !== "text") return fail(c, "forbidden", 403);
+    if (now() - row.created_at > EDIT_WINDOW_MS) return fail(c, "too_late", 403);
+    if (body !== row.body) {
+      await c.env.DB.prepare("UPDATE messages SET body = ?1, edited_at = ?2 WHERE id = ?3").bind(body, now(), id).run();
+      await emit(c.env, c.executionCtx, "chat");
+    }
+    const m = (await c.env.DB.prepare(`${SELECT} WHERE m.id = ?1`).bind(id).first<MessageRow>())!;
+    return c.json({ message: shape(m) });
+  }
   if (typeof b.pinned !== "boolean") return fail(c, "bad_pinned", 400);
   const r = b.pinned
     ? await c.env.DB.prepare("UPDATE messages SET pinned_at = ?1, pinned_by = ?2 WHERE id = ?3").bind(now(), me.id, id).run()
@@ -322,18 +352,24 @@ messages.put("/messages/:id/reaction", async (c) => {
 messages.delete("/messages/:id", async (c) => {
   const id = c.req.param("id");
   const me = c.get("me");
-  const row = await c.env.DB.prepare("SELECT author_id, media_key FROM messages WHERE id = ?1")
-    .bind(id)
-    .first<{ author_id: string; media_key: string | null }>();
+  const db = c.env.DB;
+  const row = await db.prepare("SELECT * FROM messages WHERE id = ?1").bind(id).first<Record<string, unknown>>();
   if (!row) return fail(c, "not_found", 404);
   if (row.author_id !== me.id) return fail(c, "forbidden", 403);
-  await c.env.DB.batch([
-    c.env.DB.prepare("DELETE FROM messages WHERE id = ?1 AND author_id = ?2").bind(id, me.id),
-    c.env.DB.prepare("DELETE FROM message_reactions WHERE message_id = ?1").bind(id),
+  const reactions = (
+    await db.prepare("SELECT * FROM message_reactions WHERE message_id = ?1").bind(id).all<Record<string, unknown>>()
+  ).results;
+  // Only the author sees it in their trash; the photo/voice note stays until the entry expires.
+  const kind = String(row.kind ?? "text");
+  const label = kind === "photo" ? "📷 " + (String(row.body ?? "") || "Photo") : kind === "voice" ? "🎤 Voice note" : String(row.body ?? "");
+  const trashId = newTrashId();
+  await db.batch([
+    trashStatement(db, { id: trashId, kind: "message", refId: id, label, data: { row, reactions }, mediaKey: (row.media_key as string | null) ?? null, by: me.id }),
+    db.prepare("DELETE FROM messages WHERE id = ?1 AND author_id = ?2").bind(id, me.id),
+    db.prepare("DELETE FROM message_reactions WHERE message_id = ?1").bind(id),
   ]);
-  if (row.media_key) await deleteMedia(c.env, row.media_key).catch((e) => console.error("deleteMedia failed", e));
   await emit(c.env, c.executionCtx, "chat");
-  return c.json({ ok: true });
+  return c.json({ ok: true, trash_id: trashId });
 });
 
 /** Retention deletes for runCleanup: [sql, ...bindings]. */

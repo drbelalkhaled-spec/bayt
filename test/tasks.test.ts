@@ -1,6 +1,6 @@
 import { SELF, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { runCleanup } from "../src/lib/cleanup";
+import { cleanupMedia, runCleanup } from "../src/lib/cleanup";
 import { addDays, nextDue, todayIn, zonedToEpoch } from "../src/lib/recur";
 import { api, makeHousehold, resetDb } from "./helpers";
 
@@ -372,6 +372,11 @@ describe("done photo", () => {
     expect((await patch(dad.token, t2.json.task.id, { done_photo_key: dk })).status).toBe(200);
     // deleting the task deletes its photo
     expect((await api(`/api/tasks/${id}`, { method: "DELETE", token: dad.token })).status).toBe(200);
+    await cleanupMedia(env);
+    expect(await env.MEDIA.get(k2)).not.toBeNull(); // kept while the delete can be undone
+    await env.DB.prepare("UPDATE trash SET deleted_at = ?1").bind(Date.now() - 25 * 3_600_000).run();
+    await runCleanup(env);
+    await cleanupMedia(env);
     expect(await env.DB.prepare("SELECT 1 FROM media WHERE key = ?1").bind(k2).first()).toBeNull();
     expect(await env.MEDIA.get(k2)).toBeNull();
     expect((await row(t2.json.task.id)).done_photo_key).toBe(dk);

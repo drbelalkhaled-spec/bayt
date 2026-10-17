@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from "workbox-precaching";
 import { NavigationRoute, registerRoute } from "workbox-routing";
-import { CacheFirst, NetworkFirst, StaleWhileRevalidate } from "workbox-strategies";
+import { CacheFirst, StaleWhileRevalidate } from "workbox-strategies";
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -12,17 +12,25 @@ declare const self: ServiceWorkerGlobalScope;
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
-// Navigations: network first (3 s), fall back to the precached app shell.
+// Navigations: the network (3 s), else the precached app shell. Pages are deliberately NOT cached on
+// their own: after an update such a copy points at script files that no longer exist (blank screen),
+// while the precached shell always matches the precached scripts.
 const shell = createHandlerBoundToURL("/index.html");
-const navNetwork = new NetworkFirst({ cacheName: "bayt-pages", networkTimeoutSeconds: 3 });
+const NAV_TIMEOUT_MS = 3000;
 registerRoute(
   new NavigationRoute(
     async (opts) => {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), NAV_TIMEOUT_MS);
       try {
-        return await navNetwork.handle(opts);
+        const r = await fetch(opts.request, { signal: ctl.signal });
+        if (r.ok) return r;
       } catch {
-        return shell(opts);
+        /* offline, server down or too slow */
+      } finally {
+        clearTimeout(timer);
       }
+      return shell(opts);
     },
     { denylist: [/^\/api\//] },
   ),
@@ -74,7 +82,12 @@ registerRoute(
 self.addEventListener("message", (e) => {
   if ((e.data as { type?: string } | null)?.type === "SKIP_WAITING") void self.skipWaiting();
 });
-self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener("activate", (e) =>
+  e.waitUntil(
+    // "bayt-pages" held page copies in older versions (see the navigation route); drop it.
+    caches.delete("bayt-pages").then(() => self.clients.claim()),
+  ),
+);
 
 // ---------------------------------------------------------------- token
 // Dependency-free raw IndexedDB read of the auth token (DB "bayt", store "kv", key "token").

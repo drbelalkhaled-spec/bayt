@@ -67,6 +67,9 @@ a { color: var(--chalk-blue); }
   font: 700 19px/1.2 var(--font-hand); color: var(--board); background: var(--chalk-yellow); border: 0;
 }
 .update-bar:active { opacity: .85; }
+.trash-row { align-items: center; }
+.trash-ico { flex: 0 0 auto; font-size: 20px; }
+.trash-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-inline-size: 52vw; }
 .problem { border-block-end: 1.5px dashed var(--chalk-faint); padding-block: 8px; }
 .problem summary { display: flex; flex-direction: column; gap: 2px; cursor: pointer; list-style: none; }
 .problem-when { font-size: 13px; color: var(--chalk-blue); }
@@ -224,3 +227,32 @@ a { color: var(--chalk-blue); }
   accent-color: var(--chalk-yellow);
   flex: none;
 }
+
+/* ---------- "Simple" text style (Settings -> Text style; per device) ----------
+   Same board and colors, but a plain system sans-serif and brighter secondary text. The handwriting
+   font draws small for its size, so the big handwritten sizes are brought down to match. */
+html[data-style="simple"] {
+  --font-hand: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --chalk: #F7F5EE; --chalk-dim: rgba(247, 245, 238, .9); --chalk-faint: rgba(247, 245, 238, .74);
+  --chalk-line: rgba(247, 245, 238, .66); --chalk-glow: none;
+}
+html[data-style="simple"] body { font-size: 16px; line-height: 1.45; }
+html[data-style="simple"] .top h1 { font-family: "Caveat", "Patrick Hand", cursive; } /* keep the Bayt name */
+html[data-style="simple"] .item .name { font-size: 18px; line-height: 1.25; font-weight: 600; }
+html[data-style="simple"] .t-title { font-size: 18px; line-height: 1.25; font-weight: 600; }
+html[data-style="simple"] .r-title { font-size: 17px; line-height: 1.25; font-weight: 600; }
+html[data-style="simple"] .row .title { font-size: 16px; font-weight: 600; }
+html[data-style="simple"] .row .sub, html[data-style="simple"] .item .sub { font-size: 14px; }
+html[data-style="simple"] .section-h { font-size: 17px; letter-spacing: .02em; }
+html[data-style="simple"] .empty { font-size: 18px; }
+html[data-style="simple"] .msg .author { font-size: 14px; }
+html[data-style="simple"] .msg .seen, html[data-style="simple"] .day-sep span { font-size: 13px; }
+html[data-style="simple"] .usual-label { font-size: 15px; }
+html[data-style="simple"] .store-name { font-size: 26px; }
+html[data-style="simple"] .store-cat { font-size: 20px; }
+html[data-style="simple"] .block-task, html[data-style="simple"] .blocked-banner { font-size: 16px; }
+html[data-style="simple"] .offline-bar, html[data-style="simple"] .update-bar { font-size: 15px; }
+html[data-style="simple"] .chip, html[data-style="simple"] .pill { color: var(--chalk-dim); }
+.row .seg { inline-size: auto; flex: 0 0 auto; }
+.row .seg button { min-block-size: 36px; padding-inline: 10px; font-size: 16px; }

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireMember, requireParent, type AppEnv } from "../lib/auth";
 import { emit, type PushIntent } from "../lib/events";
 import { attachMedia, deleteMedia } from "../lib/media";
+import { newTrashId, trashStatement } from "../lib/trash";
 import {
   SLOTS,
   nextDue,
@@ -478,22 +479,37 @@ tasks.delete("/tasks/:id", requireMember, requireParent, async (c) => {
       ? ["id = ?1 OR (series_id = ?2 AND done_at IS NULL)", [id, row.series_id ?? id]]
       : ["id = ?1", [id]];
   const victims = await db
-    .prepare(`SELECT id, done_photo_key, remind_at FROM tasks WHERE ${where[0]}`)
+    .prepare(`SELECT * FROM tasks WHERE ${where[0]}`)
     .bind(...(where[1] as string[]))
-    .all<{ id: string; done_photo_key: string | null; remind_at: number | null }>();
-  await db.prepare(`DELETE FROM tasks WHERE ${where[0]}`).bind(...(where[1] as string[])).run();
-  await db.prepare("DELETE FROM task_comments WHERE task_id NOT IN (SELECT id FROM tasks)").run();
-  for (const v of victims.results) {
-    if (!v.done_photo_key) continue;
-    try {
-      await deleteMedia(c.env, v.done_photo_key);
-    } catch (e) {
-      console.error("photo delete failed", e);
-    }
+    .all<Record<string, unknown>>();
+  // Each deleted task (with its questions) goes to the trash for 24 hours; photos stay until it expires.
+  const me = c.get("me");
+  const trashIds: string[] = [];
+  const stmts: D1PreparedStatement[] = [];
+  for (const row of victims.results) {
+    const comments = (
+      await db.prepare("SELECT * FROM task_comments WHERE task_id = ?1").bind(row.id).all<Record<string, unknown>>()
+    ).results;
+    const tid = newTrashId();
+    trashIds.push(tid);
+    stmts.push(
+      trashStatement(db, {
+        id: tid,
+        kind: "task",
+        refId: String(row.id),
+        label: String(row.title ?? "Task"),
+        data: { row, comments },
+        mediaKey: (row.done_photo_key as string | null) ?? null,
+        by: me.id,
+      }),
+    );
   }
+  stmts.push(db.prepare(`DELETE FROM tasks WHERE ${where[0]}`).bind(...(where[1] as string[])));
+  stmts.push(db.prepare("DELETE FROM task_comments WHERE task_id NOT IN (SELECT id FROM tasks)"));
+  await db.batch(stmts);
   await emit(c.env, c.executionCtx, "tasks");
   if (victims.results.some((v) => v.remind_at !== null)) reschedule(c);
-  return c.json({ ok: true, deleted: victims.results.length });
+  return c.json({ ok: true, deleted: victims.results.length, trash_ids: trashIds });
 });
 
 // ---- questions: a short thread on one task ----

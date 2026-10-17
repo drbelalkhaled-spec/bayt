@@ -2,6 +2,7 @@ import { ApiError, api, clearReadCache, clearToken, getToken, isOffline, loadTok
 import { h } from "./lib/dom";
 import { initInstall } from "./lib/install";
 import { initErrorReporting } from "./lib/report";
+import { applyTextStyle } from "./lib/textstyle";
 import { onEvent, onRemoved, startLive, stopLive } from "./lib/live";
 import type { LiveEvent } from "./lib/live";
 import { clearOutbox, flushOutbox, isSyncing, onOutboxChange, onOutboxSynced, pendingCount } from "./lib/outbox";
@@ -308,6 +309,7 @@ document.addEventListener("visibilitychange", () => {
 });
 onUnauthorized(() => void signOut());
 onRemoved(() => void signOut());
+applyTextStyle();
 initInstall();
 initErrorReporting();
 if (import.meta.env.PROD && "serviceWorker" in navigator) {

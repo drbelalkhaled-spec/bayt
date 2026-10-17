@@ -105,6 +105,8 @@ export function defaultText(kind: PushIntent["kind"], actor: string): string {
       return `${actor} added a new task`;
     case "task_urgent":
       return `Urgent task from ${actor}`;
+    case "item_urgent":
+      return `${actor} needs something today`;
     case "task_comment":
       return `${actor} asked about a task`;
     case "task_seen":

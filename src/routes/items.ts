@@ -3,6 +3,7 @@ import { requireMember, type AppEnv } from "../lib/auth";
 import { CATEGORIES, guessCategory, isCategory } from "../lib/categories";
 import { emit } from "../lib/events";
 import { attachMedia, deleteMedia } from "../lib/media";
+import { newTrashId, trashStatement } from "../lib/trash";
 import { clientId, fail, newId, now, readJson } from "../lib/util";
 
 const BOUGHT_TTL = 48 * 3_600_000; // bought items are hidden after this...
@@ -22,7 +23,7 @@ export function retention(nowMs: number): [string, ...unknown[]][] {
 }
 
 const SELECT = `SELECT i.id, i.name, i.qty, i.note, i.added_by, a.name AS added_by_name, i.added_at,
-    i.bought_by, b.name AS bought_by_name, i.bought_at, i.category, i.photo_key
+    i.bought_by, b.name AS bought_by_name, i.bought_at, i.category, i.photo_key, i.urgent_at
   FROM items i
   LEFT JOIN members a ON a.id = i.added_by
   LEFT JOIN members b ON b.id = i.bought_by`;
@@ -60,6 +61,15 @@ async function shoppingStatus(c: Context<AppEnv>): Promise<{ member_id: string; 
     .bind(s.member_id)
     .first<{ name: string }>();
   return m ? { member_id: s.member_id, name: m.name, since: s.since } : null;
+}
+
+/** "Needed today" goes to whoever is out shopping right now; when nobody is, to everyone else. */
+async function urgentRecipients(c: Context<AppEnv>, meId: string): Promise<string[]> {
+  const s = await shoppingStatus(c);
+  if (s && s.member_id !== meId) return [s.member_id];
+  return (
+    await c.env.DB.prepare("SELECT id FROM members WHERE removed_at IS NULL AND id != ?1").bind(meId).all<{ id: string }>()
+  ).results.map((r) => r.id);
 }
 
 /** Optional text field: undefined = absent, null = cleared, string = trimmed value; false = invalid. */
@@ -131,6 +141,8 @@ items.post("/items", requireMember, async (c) => {
   }
   if (b.photo_key !== undefined && b.photo_key !== null && typeof b.photo_key !== "string") return fail(c, "bad_photo", 400);
   const photo = typeof b.photo_key === "string" && b.photo_key ? b.photo_key : null;
+  if (b.urgent !== undefined && typeof b.urgent !== "boolean") return fail(c, "bad_urgent", 400);
+  const urgent = b.urgent === true;
   const me = c.get("me");
 
   // Idempotent replay: a client-generated id that already exists is the same request retried.
@@ -149,15 +161,21 @@ items.post("/items", requireMember, async (c) => {
   if (photo !== null && !(await claimPhoto(c, photo, me.id))) return fail(c, "bad_photo", 400);
 
   const id = cid ?? newId();
+  const t = now();
   await c.env.DB.prepare(
-    "INSERT INTO items(id, name, qty, note, added_by, added_at, category, photo_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    "INSERT INTO items(id, name, qty, note, added_by, added_at, category, photo_key, urgent_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
   )
-    .bind(id, name, qty ?? null, note ?? null, me.id, now(), category, photo)
+    .bind(id, name, qty ?? null, note ?? null, me.id, t, category, photo, urgent ? t : null)
     .run();
-  const others = (
-    await c.env.DB.prepare("SELECT id FROM members WHERE removed_at IS NULL AND id != ?1").bind(me.id).all<{ id: string }>()
-  ).results.map((r) => r.id);
-  await emit(c.env, c.executionCtx, "list", { kind: "item", to: others, actorId: me.id, text: `${me.name} added ${name} to the list` });
+  if (urgent) {
+    const to = await urgentRecipients(c, me.id);
+    await emit(c.env, c.executionCtx, "list", { kind: "item_urgent", to, actorId: me.id, text: `${me.name}: ${name} is needed today` });
+  } else {
+    const others = (
+      await c.env.DB.prepare("SELECT id FROM members WHERE removed_at IS NULL AND id != ?1").bind(me.id).all<{ id: string }>()
+    ).results.map((r) => r.id);
+    await emit(c.env, c.executionCtx, "list", { kind: "item", to: others, actorId: me.id, text: `${me.name} added ${name} to the list` });
+  }
   return c.json({ item: await getItem(c, id) });
 });
 
@@ -177,11 +195,14 @@ items.patch("/items/:id", requireMember, async (c) => {
   if (b.bought !== undefined && typeof b.bought !== "boolean") return fail(c, "bad_request", 400);
   if (b.category !== undefined && !isCategory(b.category)) return fail(c, "bad_category", 400);
   if (b.photo_key !== undefined && b.photo_key !== null && typeof b.photo_key !== "string") return fail(c, "bad_photo", 400);
+  if (b.urgent !== undefined && typeof b.urgent !== "boolean") return fail(c, "bad_urgent", 400);
 
-  const cur = await c.env.DB.prepare("SELECT id, bought_at, photo_key FROM items WHERE id = ?1").bind(id).first<{
+  const cur = await c.env.DB.prepare("SELECT id, name, bought_at, photo_key, urgent_at FROM items WHERE id = ?1").bind(id).first<{
     id: string;
+    name: string;
     bought_at: number | null;
     photo_key: string | null;
+    urgent_at: number | null;
   }>();
   if (!cur) return fail(c, "not_found", 404);
 
@@ -208,9 +229,15 @@ items.patch("/items/:id", requireMember, async (c) => {
   if (note !== undefined) add("note", note);
   if (b.category !== undefined) add("category", b.category);
   if (photoSet !== undefined) add("photo_key", photoSet);
+  let becameUrgent = false;
+  if (b.urgent === true && cur.urgent_at === null && b.bought !== true) {
+    add("urgent_at", now());
+    becameUrgent = cur.bought_at === null || b.bought === false;
+  } else if (b.urgent === false && cur.urgent_at !== null) add("urgent_at", null);
   if (b.bought === true && cur.bought_at === null) {
     add("bought_by", me.id);
     add("bought_at", now());
+    if (cur.urgent_at !== null && b.urgent === undefined) add("urgent_at", null); // bought: no longer needed
   } else if (b.bought === false) {
     add("bought_by", null);
     add("bought_at", null);
@@ -220,18 +247,42 @@ items.patch("/items/:id", requireMember, async (c) => {
     await c.env.DB.prepare(`UPDATE items SET ${sets.join(", ")} WHERE id = ?${vals.length}`).bind(...vals).run();
   }
   if (oldPhoto) await deleteMedia(c.env, oldPhoto);
-  await emit(c.env, c.executionCtx, "list");
+  await emit(
+    c.env,
+    c.executionCtx,
+    "list",
+    becameUrgent
+      ? { kind: "item_urgent", to: await urgentRecipients(c, me.id), actorId: me.id, text: `${me.name}: ${name ?? cur.name} is needed today` }
+      : undefined,
+  );
   return c.json({ item: await getItem(c, id) });
 });
 
 items.delete("/items/:id", requireMember, async (c) => {
   const id = c.req.param("id");
-  const cur = await c.env.DB.prepare("SELECT photo_key FROM items WHERE id = ?1").bind(id).first<{ photo_key: string | null }>();
-  const r = await c.env.DB.prepare("DELETE FROM items WHERE id = ?1").bind(id).run();
-  if (!r.meta.changes) return fail(c, "not_found", 404);
-  if (cur?.photo_key) await deleteMedia(c.env, cur.photo_key);
+  const db = c.env.DB;
+  const row = await db.prepare("SELECT * FROM items WHERE id = ?1").bind(id).first<Record<string, unknown>>();
+  if (!row) return fail(c, "not_found", 404);
+  // A copy goes to the trash for 24 hours (photo included) so the delete can be undone.
+  const trashId = newTrashId();
+  const [, del] = await db.batch([
+    trashStatement(db, {
+      id: trashId,
+      kind: "item",
+      refId: id,
+      label: String(row.name ?? "Item"),
+      data: { row },
+      mediaKey: (row.photo_key as string | null) ?? null,
+      by: c.get("me").id,
+    }),
+    db.prepare("DELETE FROM items WHERE id = ?1").bind(id),
+  ]);
+  if (!del?.meta.changes) {
+    await db.prepare("DELETE FROM trash WHERE id = ?1").bind(trashId).run();
+    return fail(c, "not_found", 404);
+  }
   await emit(c.env, c.executionCtx, "list");
-  return c.json({ ok: true });
+  return c.json({ ok: true, trash_id: trashId });
 });
 
 items.post("/shopping", requireMember, async (c) => {

@@ -4,6 +4,7 @@ import { onEvent, sendTyping } from "../lib/live";
 import { compressImage, pickImage, recordVoice, uploadMedia, voiceSupported, type VoiceRecording } from "../lib/media";
 import { onOutboxChange, queuedEntries, queuedIds } from "../lib/outbox";
 import { isParent, memberName, session } from "../lib/session";
+import { undoToast } from "../lib/trash";
 import { confirmDialog, openSheet, toast, type Sheet } from "../lib/ui";
 import { closeViewer, fmtDur, pendingPhotoEl, pendingVoiceEl, photoEl, stopAllAudio, voiceEl } from "./chat-media";
 import "./views.css";
@@ -20,6 +21,8 @@ interface Msg {
   media_key: string | null;
   media_meta: { w?: number; h?: number; durationMs?: number } | null;
   pinned_at: number | null;
+  /** Set when the author changed the text after sending. */
+  edited_at?: number | null;
   /** The message this one answers (a short copy of it), or null. */
   reply?: ReplyRef | null;
   /** Created on this device while offline (or not yet confirmed by the server); replaced by the server row with the same id. */
@@ -53,6 +56,7 @@ interface Page {
   reads?: ReadRow[];
   pinned?: PinnedMsg[];
   reactions?: Reaction[];
+  edits?: { id: string; body: string; edited_at: number }[];
 }
 interface Pending {
   id: string;
@@ -69,6 +73,8 @@ const MAX_VOICE_MS = 120_000;
 const MIN_VOICE_MS = 700;
 const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const SEARCH_DEBOUNCE_MS = 300;
+/** Matches the server: your own text messages can be edited for 15 minutes. */
+const EDIT_WINDOW_MS = 15 * 60_000;
 
 let root: HTMLElement | null = null;
 let msgs: Msg[] = [];
@@ -85,7 +91,6 @@ let lastCursor: string | null = null;
 let ready = false;
 let busy = false;
 let loadingOlder = false;
-let refreshCount = 0;
 let gen = 0;
 let sig = "";
 let lastReadPosted = 0;
@@ -170,6 +175,13 @@ function applyExtras(p: Page): boolean {
     reads = p.reads;
     changed = true;
   }
+  for (const e of p.edits ?? []) {
+    const m = msgs.find((x) => x.id === e.id);
+    if (m && (m.edited_at ?? 0) < e.edited_at) {
+      msgs = msgs.map((x) => (x.id === e.id ? { ...x, body: e.body, edited_at: e.edited_at } : x));
+      changed = true;
+    }
+  }
   if (p.reactions && JSON.stringify(p.reactions) !== JSON.stringify(reactions)) {
     reactions = p.reactions;
     changed = true;
@@ -213,7 +225,7 @@ function render(): void {
   const seen = seenText();
   const pinIds = new Set(pinned.map((p) => p.id));
   waiting = queuedIds();
-  const s = JSON.stringify([msgs.map((m) => m.id), olderCursor !== null, [...pinIds], seen, pending.map((p) => p.id), [...waiting], reactions]);
+  const s = JSON.stringify([msgs.map((m) => m.id + ":" + (m.edited_at ?? "")), olderCursor !== null, [...pinIds], seen, pending.map((p) => p.id), [...waiting], reactions]);
   if (s === sig) return;
   sig = s;
   const top = msgsEl.scrollTop;
@@ -243,7 +255,7 @@ function render(): void {
           m.reply ? quoteEl(m.reply) : null,
           isMedia ? mediaFor(m) : null,
           m.body ? h("span", { class: "text" }, m.body) : null,
-          h("span", { class: "time" }, pinIds.has(m.id) ? h("span", { class: "pin-ico", "aria-label": "Pinned" }, "\u{1F4CC} ") : null, m.local && waiting.has(m.id) ? h("span", { class: "wait-clock", title: "Waiting to send", "aria-label": "Waiting to send" }, "⏳") : timeLabel(m.created_at)),
+          h("span", { class: "time" }, pinIds.has(m.id) ? h("span", { class: "pin-ico", "aria-label": "Pinned" }, "\u{1F4CC} ") : null, m.local && waiting.has(m.id) ? h("span", { class: "wait-clock", title: "Waiting to send", "aria-label": "Waiting to send" }, "⏳") : (m.edited_at ? "edited · " : "") + timeLabel(m.created_at)),
         ),
         reactionsEl(m),
         seen && seen.id === m.id ? h("div", { class: "seen" }, seen.text) : null,
@@ -567,10 +579,52 @@ function scheduleRead(): void {
 }
 
 // ---------- message actions ----------
+const canEdit = (m: Msg): boolean => isMine(m) && m.kind === "text" && !m.local && Date.now() - m.created_at < EDIT_WINDOW_MS;
+
+function openEditMsg(m: Msg): void {
+  const sheet = openSheet("Edit message");
+  const ta = h("textarea", { class: "input", rows: 3, maxLength: 2000, "aria-label": "Message text" });
+  ta.value = m.body;
+  const err = h("p", { class: "error", role: "alert" });
+  const save = h("button", { class: "btn primary", type: "submit" }, "Save");
+  const form = h(
+    "form",
+    {
+      class: "stack",
+      onsubmit: async (e: Event) => {
+        e.preventDefault();
+        const body = ta.value.trim();
+        if (!body) return void (err.textContent = "The message can't be empty");
+        if (body === m.body) return sheet.close();
+        save.disabled = true;
+        try {
+          const r = await api<{ message: Msg }>("/api/messages/" + m.id, { method: "PATCH", body: { body } });
+          msgs = msgs.map((x) => (x.id === m.id ? { ...x, body: r.message.body, edited_at: r.message.edited_at } : x));
+          render();
+          sheet.close();
+        } catch (ex) {
+          err.textContent = ex instanceof ApiError && ex.code === "too_late" ? "Messages can only be edited for 15 minutes" : errMsg(ex);
+          save.disabled = false;
+        }
+      },
+    },
+    h("label", { class: "field" }, ta),
+    err,
+    h("div", { class: "actions" }, h("button", { class: "btn", type: "button", onclick: () => sheet.close() }, "Cancel"), save),
+  );
+  add(sheet.body, form);
+  setTimeout(() => {
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }, 50);
+}
+
 async function removeMsg(m: Msg): Promise<void> {
   if (!(await confirmDialog("Delete this message for everyone?", "Delete", true))) return;
   try {
-    await api("/api/messages/" + m.id, { method: "DELETE" });
+    const r = await api<{ trash_id?: string }>("/api/messages/" + m.id, { method: "DELETE" });
+    // A restored message keeps its original time, so reload the window rather than fetching "newer than".
+    undoToast("message", r.trash_id ? [r.trash_id] : undefined, () => void loadInitial().catch(() => undefined));
     msgs = msgs.filter((x) => x.id !== m.id);
     pinned = pinned.filter((x) => x.id !== m.id);
     reactions = reactions.filter((r) => r.message_id !== m.id);
@@ -757,6 +811,7 @@ function openActions(m: Msg): void {
     if (isParent()) act("✅ Make a task", () => openMakeTask(m));
   }
   act(isPinned ? "\u{1F4CC} Unpin" : "\u{1F4CC} Pin", () => void setPinned(m, !isPinned));
+  if (canEdit(m)) act("✏️ Edit", () => openEditMsg(m));
   if (m.body) act("\u{1F4CB} Copy text", () => void copyText(m.body));
   if (isMine(m)) act("\u{1F5D1} Delete", () => void removeMsg(m), true);
 }
@@ -879,8 +934,9 @@ export async function refresh(): Promise<void> {
       if (!p.more || ++guard > 10) break;
     }
     let changed = merge(fresh) || extrasChanged;
-    // Deletions are invisible to `after`, so now and then compare against the latest window.
-    if (++refreshCount % 3 === 0 && !isOffline()) {
+    // Deletions and restores (which keep their original time) are invisible to `after`, so also compare
+    // against the latest window on every update: deleted-for-everyone messages vanish right away.
+    if (!isOffline()) {
       const latest = await fetchPage("");
       if (my !== gen || !root) return;
       if (applyExtras(latest)) changed = true;
@@ -932,7 +988,6 @@ export function mount(el: HTMLElement): () => void {
   ready = false;
   busy = false;
   loadingOlder = false;
-  refreshCount = 0;
   lastReadPosted = 0;
   sig = "";
   gen++;

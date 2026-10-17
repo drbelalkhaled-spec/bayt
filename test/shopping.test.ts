@@ -1,5 +1,6 @@
 import { SELF, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { cleanupMedia, runCleanup } from "../src/lib/cleanup";
 import { api, makeHousehold, resetDb, type TestMember } from "./helpers";
 
 beforeEach(resetDb);
@@ -127,11 +128,16 @@ describe("item photos", () => {
     expect(l.json.items.find((i: any) => i.id === id).photo_key).toBeNull();
   });
 
-  it("deleting an item deletes its photo", async () => {
+  it("a deleted item's photo is kept while it can be undone, then purged", async () => {
     const { dad } = await makeHousehold();
     const a = await upload(dad);
     const id = (await api("/api/items", { token: dad.token, body: { name: "Milk", photo_key: a.key } })).json.item.id;
     expect((await api(`/api/items/${id}`, { method: "DELETE", token: dad.token })).status).toBe(200);
+    await cleanupMedia(env);
+    expect(await env.MEDIA.get(a.key)).not.toBeNull(); // still in the trash
+    await env.DB.prepare("UPDATE trash SET deleted_at = ?1").bind(Date.now() - 25 * 3_600_000).run();
+    await runCleanup(env);
+    await cleanupMedia(env);
     expect(await env.MEDIA.get(a.key)).toBeNull();
     expect(await env.DB.prepare("SELECT key FROM media WHERE key = ?1").bind(a.key).first()).toBeNull();
   });

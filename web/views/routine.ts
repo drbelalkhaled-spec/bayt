@@ -1,6 +1,7 @@
 // Daily routine: shared task types/helpers and the parents' "Manage routine" sheet.
 import { ApiError, api } from "../lib/api";
 import { add, clear, h } from "../lib/dom";
+import { undoToast } from "../lib/trash";
 import { confirmDialog, openSheet, toast } from "../lib/ui";
 
 export type Recur = { freq: "daily" } | { freq: "every"; days: number } | { freq: "weekly"; weekdays: number[] };
@@ -271,8 +272,9 @@ export function openRoutineManager(onChange: () => void): void {
                 onclick: async () => {
                   if (!(await confirmDialog(`Remove "${t.title}" from the routine?`, "Remove", true))) return;
                   try {
-                    await api(`/api/tasks/${t.id}?series=1`, { method: "DELETE" });
+                    const r = await api<{ trash_ids?: string[] }>(`/api/tasks/${t.id}?series=1`, { method: "DELETE" });
                     changed();
+                    undoToast(`"${t.title}"`, r.trash_ids, changed);
                   } catch (e) {
                     toast(errMsg(e), true);
                   }

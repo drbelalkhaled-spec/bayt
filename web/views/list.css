@@ -22,6 +22,13 @@
 .shop-banner .grow { flex: 1; min-inline-size: 0; }
 
 .aisle-h { margin-block-start: 6px; font-size: 22px; color: var(--chalk-blue); }
+.aisle-h.needed-h { color: #FF8A8A; }
+.row.item.is-needed { border-color: #FF8A8A; }
+.pill.needed { color: #FF8A8A; border-color: #FF8A8A; font-weight: 700; }
+.add-form .urgent-toggle { font-size: 16px; opacity: .55; }
+.add-form .urgent-toggle.on { opacity: 1; border-color: #FF8A8A; background: rgba(255, 138, 138, .15); }
+.needed-btn.on { color: #FF8A8A; border-color: #FF8A8A; }
+.store-urgent { font-size: .8em; }
 .list-body > .aisle-h:first-child { margin-block-start: 0; }
 .list-body { display: flex; flex-direction: column; gap: 8px; }
 
@@ -68,4 +75,11 @@
 .store-cart-toggle {
   display: block; inline-size: 100%; min-block-size: 56px; margin-block-start: 18px; text-align: start; padding-inline: 8px;
   font: 700 28px/1.1 var(--font-hand); color: var(--chalk-yellow); border-block-start: 2px solid var(--chalk-line);
+}
+
+/* Phones: the item name gets its own full-width line; quantity, needed-today, photo and Add go below. */
+@media (max-width: 480px) {
+  .add-form { flex-wrap: wrap; }
+  .add-form .input:not(.qty-in) { flex: 1 1 100%; }
+  .add-form .qty-in { flex: 1 1 60px; inline-size: auto; }
 }
