@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
+import { reportError } from "./lib/errors";
 import { nextReminderAt, sendDueReminders } from "./lib/reminders";
 
 const MAX_FRAME = 1024;
@@ -90,7 +91,7 @@ export class Household extends DurableObject<Env> {
       const sent = await sendDueReminders(this.env);
       if (sent) this.broadcast({ type: "changed", scope: "tasks" });
     } catch (e) {
-      console.error("reminder alarm failed", e);
+      await reportError(this.env, "reminders", e);
     }
     await this.armReminders();
   }

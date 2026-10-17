@@ -5,7 +5,7 @@ import { online } from "../lib/live";
 import { isParent, loadSession, session } from "../lib/session";
 import type { Member } from "../lib/session";
 import { kvGet, kvSet } from "../lib/store";
-import { confirmDialog, openSheet, toast } from "../lib/ui";
+import { confirmDialog, openSheet, timeAgo, toast } from "../lib/ui";
 
 export function openSettings(signOut: () => void): void {
   const sheet = openSheet("Settings");
@@ -88,6 +88,8 @@ export function openSettings(signOut: () => void): void {
         linkBox,
       );
     }
+
+    if (me.role === "parent") add(body, ...(await problemsSection()));
 
     // Notifications + install
     add(body, h("h3", null, "This device"));
@@ -227,4 +229,91 @@ async function notificationsRow(): Promise<HTMLElement> {
     if (row) row.replaceWith(await notificationsRow());
   });
   return h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, "Notifications"), h("div", { class: "sub" }, enabled ? "On for this device" : "Get alerts for new messages and tasks")), btn);
+}
+
+interface Problem {
+  id: string;
+  at: number;
+  source: string;
+  message: string;
+  detail: string | null;
+}
+
+/** Parents: opt in to problem alerts and look at recent app problems. */
+async function problemsSection(): Promise<HTMLElement[]> {
+  let data: { errors: Problem[]; alerts: boolean };
+  try {
+    data = await api<{ errors: Problem[]; alerts: boolean }>("/api/errors");
+  } catch {
+    return [];
+  }
+  const alertBtn = h("button", { class: "btn small" + (data.alerts ? "" : " primary") }, data.alerts ? "Turn off" : "Turn on");
+  alertBtn.addEventListener("click", async () => {
+    alertBtn.disabled = true;
+    try {
+      const r = await api<{ alerts: boolean }>("/api/errors/alerts", { method: "PUT", body: { on: !data.alerts } });
+      data.alerts = r.alerts;
+      toast(r.alerts ? "You'll be alerted about app problems" : "Problem alerts off");
+      alertBtn.textContent = r.alerts ? "Turn off" : "Turn on";
+      alertBtn.classList.toggle("primary", !r.alerts);
+      sub.textContent = r.alerts ? "On: at most one notification an hour" : "Get a notification when something breaks";
+    } catch {
+      toast("Could not change problem alerts", true);
+    } finally {
+      alertBtn.disabled = false;
+    }
+  });
+  const sub = h("div", { class: "sub" }, data.alerts ? "On: at most one notification an hour" : "Get a notification when something breaks");
+  const n = data.errors.length;
+  const viewBtn = h("button", { class: "btn small", disabled: !n, onclick: () => openProblems(data.errors) }, "View");
+  return [
+    h("h3", null, "App problems"),
+    h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, "Problem alerts"), sub), alertBtn),
+    h(
+      "div",
+      { class: "row" },
+      h("div", { class: "grow" }, h("div", { class: "title" }, n ? `${n === 50 ? "50+" : n} recent problem${n === 1 ? "" : "s"}` : "No problems recorded"), n ? h("div", { class: "sub" }, `Latest ${timeAgo(data.errors[0]!.at)}: ${data.errors[0]!.message.slice(0, 60)}`) : null),
+      viewBtn,
+    ),
+  ];
+}
+
+function openProblems(list: Problem[]): void {
+  const sheet = openSheet("App problems");
+  const rows = list.map((p) =>
+    h(
+      "details",
+      { class: "problem" },
+      h("summary", null, h("span", { class: "problem-when" }, `${timeAgo(p.at)} · ${p.source}`), h("span", { class: "problem-msg" }, p.message)),
+      p.detail ? h("pre", { class: "problem-detail" }, p.detail) : null,
+    ),
+  );
+  add(
+    sheet.body,
+    h("p", { class: "muted" }, "Kept for 30 days. Tap one for details you can send to whoever fixes the app."),
+    ...rows,
+    h(
+      "div",
+      { class: "actions" },
+      h("button", { class: "btn", type: "button", onclick: () => sheet.close() }, "Close"),
+      h(
+        "button",
+        {
+          class: "btn danger",
+          type: "button",
+          onclick: async () => {
+            if (!(await confirmDialog("Clear the problem list?", "Clear", true))) return;
+            try {
+              await api("/api/errors", { method: "DELETE" });
+              sheet.close();
+              toast("Problem list cleared");
+            } catch {
+              toast("Could not clear", true);
+            }
+          },
+        },
+        "Clear all",
+      ),
+    ),
+  );
 }

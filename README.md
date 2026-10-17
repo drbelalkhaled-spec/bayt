@@ -72,7 +72,7 @@ that phone out immediately. The household is capped at 3 members by default
 | Realtime + reminders | One `Household` Durable Object (hibernating WebSockets, alarms) |
 | Push | Dependency-free VAPID Web Push, content-free payloads |
 | Client | Vanilla TypeScript, Vite, [vite-plugin-pwa](https://vite-pwa-org.netlify.app) (Workbox) |
-| Tests | Vitest with `@cloudflare/vitest-pool-workers` (120 tests) |
+| Tests | Vitest with `@cloudflare/vitest-plugin` |
 
 ## Run it locally
 

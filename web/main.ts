@@ -1,6 +1,7 @@
 import { ApiError, api, clearReadCache, clearToken, getToken, isOffline, loadToken, onNetworkChange, onUnauthorized } from "./lib/api";
 import { h } from "./lib/dom";
 import { initInstall } from "./lib/install";
+import { initErrorReporting } from "./lib/report";
 import { onEvent, onRemoved, startLive, stopLive } from "./lib/live";
 import type { LiveEvent } from "./lib/live";
 import { clearOutbox, flushOutbox, isSyncing, onOutboxChange, onOutboxSynced, pendingCount } from "./lib/outbox";
@@ -9,7 +10,7 @@ import type { Route } from "./lib/router";
 import { clearSession, isParent, loadSession, session } from "./lib/session";
 import { kvGet, kvSet } from "./lib/store";
 import { resubscribePush } from "./push";
-import { closeAllSheets, toast } from "./lib/ui";
+import { closeAllSheets } from "./lib/ui";
 import * as chatView from "./views/chat";
 import * as listView from "./views/list";
 import { showOnboarding } from "./views/onboarding";
@@ -31,6 +32,9 @@ let unsub: (() => void) | null = null;
 let signingOut = false;
 let main: HTMLElement | null = null;
 let offlineBar: HTMLElement | null = null;
+let updateBar: HTMLElement | null = null;
+/** A downloaded new version waiting for the go-ahead (see the service worker block at the end). */
+let updateReady: ServiceWorker | null = null;
 const tabEls = new Map<Route, HTMLElement>();
 
 // Tab badges: how many things others added or changed since this tab was last open.
@@ -119,6 +123,16 @@ function paintOffline(): void {
   offlineBar.classList.toggle("syncing", !off && !!text);
 }
 
+function paintUpdate(): void {
+  if (updateBar) updateBar.hidden = !updateReady;
+}
+
+function applyUpdate(): void {
+  if (!updateReady) return;
+  if (updateBar) updateBar.textContent = "Updating…";
+  updateReady.postMessage({ type: "SKIP_WAITING" }); // the controllerchange handler reloads
+}
+
 function paintBadges(): void {
   for (const [r, el] of badges) {
     el.hidden = counts[r] <= 0;
@@ -200,6 +214,7 @@ function onLive(e: LiveEvent): void {
 function buildFrame(): void {
   main = h("main", { class: "main", id: "main" });
   offlineBar = h("div", { class: "offline-bar", role: "status", "aria-live": "polite", hidden: true });
+  updateBar = h("button", { class: "update-bar", type: "button", hidden: true, onclick: applyUpdate }, "✨ New version ready — tap to update");
   badges.clear();
   tabEls.clear();
   const tabs = TABS.map((t) => {
@@ -225,6 +240,7 @@ function buildFrame(): void {
         h("h1", null, "Bayt"),
         h("button", { class: "icon-btn", "aria-label": "Settings", onclick: () => openSettings(() => void signOut()) }, "⚙"),
       ),
+      updateBar,
       offlineBar,
       main,
       h("nav", { class: "tabbar", "aria-label": "Sections" }, tabs),
@@ -232,6 +248,7 @@ function buildFrame(): void {
   );
   paintBadges();
   paintOffline();
+  paintUpdate();
 }
 
 async function startApp(): Promise<void> {
@@ -292,6 +309,7 @@ document.addEventListener("visibilitychange", () => {
 onUnauthorized(() => void signOut());
 onRemoved(() => void signOut());
 initInstall();
+initErrorReporting();
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   const hadController = !!navigator.serviceWorker.controller;
   let reloading = false;
@@ -300,22 +318,35 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
     reloading = true;
     location.reload();
   });
+  // A new version found right after opening is applied at once (nothing on screen to lose yet);
+  // later ones wait behind the "New version ready" bar so nobody loses what they are typing.
+  const OPEN_GRACE_MS = 6000;
+  const CHECK_EVERY_MS = 30 * 60 * 1000;
   navigator.serviceWorker
     .register("/sw.js")
     .then((reg) => {
-      const activate = (w: ServiceWorker | null): void => {
-        if (w && navigator.serviceWorker.controller) {
-          toast("Updating Bayt…");
-          w.postMessage({ type: "SKIP_WAITING" });
-        }
+      const ready = (w: ServiceWorker | null): void => {
+        if (!w || !navigator.serviceWorker.controller) return; // first install: nothing to replace
+        updateReady = w;
+        if (performance.now() < OPEN_GRACE_MS || !main) applyUpdate();
+        else paintUpdate();
       };
-      activate(reg.waiting);
-      reg.addEventListener("updatefound", () => {
-        const w = reg.installing;
+      const watch = (w: ServiceWorker | null): void => {
         w?.addEventListener("statechange", () => {
-          if (w.state === "installed") activate(w);
+          if (w.state === "installed") ready(w);
         });
+      };
+      ready(reg.waiting);
+      watch(reg.installing); // an update may already be downloading when we get here
+      reg.addEventListener("updatefound", () => watch(reg.installing));
+      // Installed apps are rarely reopened from scratch, so look for updates whenever Bayt comes back on screen.
+      const check = (): void => void reg.update().catch(() => undefined);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") check();
       });
+      setInterval(() => {
+        if (document.visibilityState === "visible") check();
+      }, CHECK_EVERY_MS);
       void loadToken().then(() => {
         const t = getToken();
         if (t && "Notification" in window && Notification.permission === "granted") void resubscribePush(t);

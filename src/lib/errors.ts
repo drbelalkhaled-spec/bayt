@@ -1,0 +1,42 @@
+import type { Env } from "../env";
+import { claim, ensureVapid, sendPush, storeNotice } from "./push";
+import { newId, now } from "./util";
+
+/** At most one problem alert per parent per hour, however many errors happen. */
+export const ALERT_EVERY_MS = 3_600_000;
+const MAX_SOURCE = 120;
+const MAX_MESSAGE = 300;
+const MAX_DETAIL = 2000;
+
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message || e.name : String(e ?? ""));
+
+/**
+ * Records a problem in error_log and pushes a short alert to parents who turned alerts on.
+ * Never throws: it runs inside error handlers.
+ */
+export async function reportError(env: Env, source: string, err: unknown, detail?: string | null): Promise<void> {
+  try {
+    console.error(source, err);
+    const message = messageOf(err).slice(0, MAX_MESSAGE) || "Unknown error";
+    const extra = (detail ?? (err instanceof Error ? err.stack : null) ?? "").slice(0, MAX_DETAIL) || null;
+    const t = now();
+    const where = source.slice(0, MAX_SOURCE);
+    await env.DB.prepare("INSERT INTO error_log(id, at, source, message, detail) VALUES (?1, ?2, ?3, ?4, ?5)")
+      .bind(newId(), t, where, message, extra)
+      .run();
+    const { results } = await env.DB.prepare(
+      `SELECT id, push_sub FROM members
+       WHERE role = 'parent' AND error_alerts = 1 AND removed_at IS NULL AND push_sub IS NOT NULL`,
+    ).all<{ id: string; push_sub: string }>();
+    if (!results.length) return;
+    const vapid = await ensureVapid(env);
+    const text = `Bayt had a problem (${where}): ${message}`.slice(0, 180);
+    for (const m of results) {
+      if (!(await claim(env, m.id, "error", t, ALERT_EVERY_MS))) continue;
+      await storeNotice(env, m.id, { kind: "error", actorName: "Bayt", text, at: t });
+      await sendPush(env, m, vapid, false); // false: a failing alert must not report itself again
+    }
+  } catch (e) {
+    console.error("reportError failed", e);
+  }
+}

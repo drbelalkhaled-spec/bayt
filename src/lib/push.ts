@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { reportError } from "./errors";
 import type { PushIntent } from "./events";
 import { now } from "./util";
 
@@ -21,7 +22,7 @@ export interface Vapid {
 }
 
 export interface Notice {
-  kind: PushIntent["kind"] | "test";
+  kind: PushIntent["kind"] | "test" | "error";
   actorName: string;
   text: string;
   at: number;
@@ -69,6 +70,7 @@ export async function sendPush(
   env: Env,
   recipient: { id: string; push_sub: string | null },
   vapid?: Vapid,
+  report = true,
 ): Promise<boolean> {
   try {
     if (!recipient.push_sub) return false;
@@ -85,9 +87,12 @@ export async function sendPush(
       await env.DB.prepare("UPDATE members SET push_sub = NULL WHERE id = ?1").bind(recipient.id).run();
       return false;
     }
+    // Anything else means notifications are silently not arriving: worth telling a parent.
+    if (!r.ok && report) await reportError(env, "notifications", `The push service refused a notification (HTTP ${r.status})`, null);
     return r.ok;
   } catch (e) {
-    console.error("sendPush failed", e);
+    if (report) await reportError(env, "notifications", e);
+    else console.error("sendPush failed", e);
     return false;
   }
 }
@@ -135,13 +140,13 @@ export async function readNotice(env: Env, memberId: string): Promise<Notice | n
   }
 }
 
-/** Atomic throttle claim: true when this (member, kind) may send now. */
-async function claim(env: Env, memberId: string, kind: string, t: number): Promise<boolean> {
+/** Atomic throttle claim: true when this (member, kind) may send now (nothing sent in the last `every` ms). */
+export async function claim(env: Env, memberId: string, kind: string, t: number, every = THROTTLE_MS): Promise<boolean> {
   const r = await env.DB.prepare(
     `INSERT INTO push_log(member_id, kind, sent_at) VALUES(?1, ?2, ?3)
      ON CONFLICT(member_id, kind) DO UPDATE SET sent_at = excluded.sent_at WHERE push_log.sent_at < ?4`,
   )
-    .bind(memberId, kind, t, t - THROTTLE_MS)
+    .bind(memberId, kind, t, t - every)
     .run();
   return r.meta.changes > 0;
 }

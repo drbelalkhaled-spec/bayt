@@ -16,7 +16,8 @@ export interface OutboxEntry {
 }
 
 const KEY = "outbox";
-const RETRY_MS = 20000;
+/** How often waiting changes are retried while the server cannot be reached (the browser may still say "online"). */
+const RETRY_MS = 5000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ITEM = /^\/api\/items\/([^/?]+)$/;
 const TASK = /^\/api\/tasks\/([^/?]+)$/;
@@ -206,6 +207,10 @@ const ready: Promise<void> = (async () => {
 
 setQueueHook({ ready, hasPending: () => queue.length > 0, queueable, enqueue });
 window.addEventListener("online", () => void flushOutbox());
+// Phones pause the app in the background: try again the moment it is back on screen.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void flushOutbox();
+});
 onNetworkChange(() => {
   if (!isOffline()) void flushOutbox();
 });

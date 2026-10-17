@@ -62,6 +62,16 @@ a { color: var(--chalk-blue); }
   font: 700 19px/1.2 var(--font-hand); color: var(--chalk-yellow); background: var(--board);
   border: 2px dashed var(--chalk-yellow); text-shadow: var(--chalk-glow);
 }
+.update-bar {
+  flex-shrink: 0; margin: 0 2px 6px; padding: 6px 12px; border-radius: var(--radius-sm); text-align: center;
+  font: 700 19px/1.2 var(--font-hand); color: var(--board); background: var(--chalk-yellow); border: 0;
+}
+.update-bar:active { opacity: .85; }
+.problem { border-block-end: 1.5px dashed var(--chalk-faint); padding-block: 8px; }
+.problem summary { display: flex; flex-direction: column; gap: 2px; cursor: pointer; list-style: none; }
+.problem-when { font-size: 13px; color: var(--chalk-blue); }
+.problem-msg { overflow-wrap: anywhere; }
+.problem-detail { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; color: var(--chalk-dim); max-block-size: 30vh; overflow: auto; margin: 6px 0 0; }
 .offline-bar.syncing { color: var(--chalk-pink); border-color: var(--chalk-pink); }
 .sync-wait { color: var(--chalk-yellow); font-family: var(--font-hand); font-size: 1.05em; white-space: nowrap; }
 .wait-clock { font-size: 13px; }

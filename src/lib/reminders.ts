@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { reportError } from "./errors";
 import { deliver } from "./push";
 import { now } from "./util";
 
@@ -69,7 +70,7 @@ export async function sendDueReminders(env: Env, t = now()): Promise<number> {
     try {
       await deliver(env, { kind: "reminder", to, actorId, text: `Reminder: ${r.title} at ${r.due_time ?? ""}`.trim() });
     } catch (e) {
-      console.error("reminder push failed", e);
+      await reportError(env, "reminders", e);
     }
   }
   return sent;

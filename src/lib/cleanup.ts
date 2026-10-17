@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { retention as errorsRetention } from "../routes/errors";
 import { retention as itemsRetention } from "../routes/items";
 import { retention as messagesRetention } from "../routes/messages";
 import { retention as tasksRetention } from "../routes/tasks";
@@ -13,6 +14,7 @@ function statements(now: number): [string, ...unknown[]][] {
     ...itemsRetention(now),
     ...tasksRetention(now),
     ...messagesRetention(now),
+    ...errorsRetention(now),
   ];
 }
 
