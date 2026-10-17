@@ -127,6 +127,13 @@ function merge(list: Msg[]): boolean {
     if (!old || old.local) {
       byId.set(m.id, m);
       changed = true;
+      // Their message arrived, so they have stopped typing it.
+      const t = !old ? typers.get(m.author_id) : undefined;
+      if (t !== undefined) {
+        clearTimeout(t);
+        typers.delete(m.author_id);
+        paintTyping();
+      }
     }
   }
   if (changed) msgs = [...byId.values()].sort((a, b) => a.created_at - b.created_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
