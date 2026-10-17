@@ -15,7 +15,6 @@
 }
 .cant-btn:active { background: rgba(244, 166, 184, .15); }
 .task-actions .ok-btn { color: var(--chalk-blue); border-color: var(--chalk-blue); }
-.ok-btn span { font-size: 13px; text-align: center; }
 .ok-btn:active { background: rgba(159, 211, 230, .15); }
 .chip.seen { color: var(--chalk-blue); border-color: var(--chalk-blue); }
 .chip.unseen { border-style: dashed; }

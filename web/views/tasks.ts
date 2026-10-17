@@ -65,8 +65,10 @@ const canTick = (t: Task): boolean => isParent() || !t.assignee_id || t.assignee
 const canUndo = (t: Task): boolean => isParent() || t.done_by === meId();
 const canBlock = (t: Task): boolean => !t.blocked_at && (!t.assignee_id || t.assignee_id === meId());
 const canPhoto = (t: Task): boolean => isParent() || t.done_by === meId();
-/** "OK, I'll do it" is the helper's acknowledgement: offered on her own tasks and on "Anyone" tasks (parents only on their own). */
-const canSee = (t: Task): boolean => !t.seen_at && (t.assignee_id ? t.assignee_id === meId() : !isParent());
+/** "Will do": anyone who may do the task can claim it first (their own tasks and "Anyone" tasks). */
+const canSee = (t: Task): boolean => !t.seen_at && (!t.assignee_id || t.assignee_id === meId());
+/** Who clicked, as everyone else should read it. */
+const who = (id: string | null, name: string | null): string => (id && id === meId() ? "You" : name || "Someone");
 
 const WAIT_CHIP = (): HTMLElement => h("span", { class: "chip sync-wait" }, "⏳ waiting to sync");
 
@@ -213,7 +215,7 @@ function openCard(t: Task): HTMLElement {
     due ? h("span", { class: "chip" + (due.overdue ? " overdue" : "") }, due.label + (t.due_time ? " · " + t.due_time : "")) : null,
     t.recur ? recurChip(t.recur) : null,
     t.seen_at
-      ? h("span", { class: "chip seen", title: timeAgo(t.seen_at) }, "✓ Will do" + (t.seen_by && t.seen_by !== meId() && t.seen_by_name ? " · " + t.seen_by_name : ""))
+      ? h("span", { class: "chip seen", title: timeAgo(t.seen_at) }, "✓ Will do · " + who(t.seen_by, t.seen_by_name))
       : parent && t.assignee_id !== meId()
         ? h("span", { class: "chip unseen" }, "Waiting for OK")
         : null,
@@ -223,7 +225,7 @@ function openCard(t: Task): HTMLElement {
     ? h(
         "div",
         { class: "blocked-banner", role: "note" },
-        h("span", { class: "grow" }, "Couldn't do: ", t.blocked_reason ?? "", " — ", t.blocked_by_name || "Someone"),
+        h("span", { class: "grow" }, "Couldn't do: ", t.blocked_reason ?? "", " — ", who(t.blocked_by, t.blocked_by_name)),
         parent
           ? h(
               "button",
@@ -264,7 +266,7 @@ function openCard(t: Task): HTMLElement {
   );
   const actions = h("div", { class: "task-actions" });
   if (canSee(t))
-    add(actions, h("button", { class: "done-btn ok-btn", type: "button", "aria-label": "OK, I'll do it: " + t.title, onclick: () => void setSeen(t.id) }, "✓", h("span", null, "OK, I'll do it")));
+    add(actions, h("button", { class: "done-btn ok-btn", type: "button", "aria-label": "Will do: " + t.title, onclick: () => void setSeen(t.id) }, "✓", h("span", null, "Will do")));
   if (canTick(t))
     add(actions, h("button", { class: "done-btn", type: "button", "aria-label": "Mark done: " + t.title, onclick: () => void setDone(t.id, true) }, "✓", h("span", null, "Done")));
   if (canBlock(t))
@@ -288,7 +290,7 @@ function doneCard(t: Task): HTMLElement {
       "div",
       { class: "grow" },
       h("div", { class: "t-title struck" }, t.title),
-      h("div", { class: "sub" }, `done by ${t.done_by_name || "Someone"} · ${t.done_at ? timeAgo(t.done_at) : ""}`, waiting.has(t.id) ? " · ⏳ waiting to sync" : null),
+      h("div", { class: "sub" }, `done by ${who(t.done_by, t.done_by_name)} · ${t.done_at ? timeAgo(t.done_at) : ""}`, waiting.has(t.id) ? " · ⏳ waiting to sync" : null),
     ),
     !t.done_photo_key && canPhoto(t)
       ? h("button", { class: "btn small ghost photo-add", type: "button", "aria-label": "Add photo: " + t.title, onclick: () => void addPhoto(t.id) }, "📷")

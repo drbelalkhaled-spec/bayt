@@ -49,6 +49,13 @@ describe("task seen", () => {
     expect(d.json.task.seen_at).toBe(first);
   });
 
+  it("anyone may claim an unassigned task, and the claimer is named", async () => {
+    const t = await newTask({ title: "Groceries" });
+    const s = await patch(mom, t.id, { seen: true });
+    expect(s.status).toBe(200);
+    expect(s.json.task.seen_by_name).toBe("Mom");
+  });
+
   it("done without seen also records seen", async () => {
     const t = await newTask({ title: "Mop" });
     const d = await patch(nanny, t.id, { done: true });
