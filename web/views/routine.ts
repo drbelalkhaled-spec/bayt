@@ -25,6 +25,10 @@ export interface Task {
   seen_at: number | null;
   seen_by: string | null;
   seen_by_name: string | null;
+  urgent: boolean;
+  comment_count: number;
+  last_comment_at: number | null;
+  last_comment_by: string | null;
   created_by: string;
   created_by_name: string | null;
   created_at: number;

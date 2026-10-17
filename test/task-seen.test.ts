@@ -47,6 +47,8 @@ describe("task seen", () => {
     expect((await patch(nanny, t.id, { seen: true })).json.task.seen_at).toBe(first);
     const d = await patch(nanny, t.id, { done: true });
     expect(d.json.task.seen_at).toBe(first);
+    // Let the "finished" push go out before the fake push service is removed.
+    await waitFor(async () => (await notice(mom))?.kind === "task_done");
   });
 
   it("anyone may claim an unassigned task, and the claimer is named", async () => {

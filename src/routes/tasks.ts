@@ -21,12 +21,16 @@ const MAX_TITLE = 120;
 const MAX_NOTE = 500;
 const MAX_REASON = 200;
 const MAX_ITEM = 80;
+const MAX_COMMENT = 500;
 
 const tasks = new Hono<AppEnv>();
 
 /** Retention deletes for runCleanup: [sql, ...bindings]. */
 export function retention(t: number): [string, ...unknown[]][] {
-  return [["DELETE FROM tasks WHERE done_at IS NOT NULL AND done_at < ?1", t - 30 * DAY]];
+  return [
+    ["DELETE FROM tasks WHERE done_at IS NOT NULL AND done_at < ?1", t - 30 * DAY],
+    ["DELETE FROM task_comments WHERE task_id NOT IN (SELECT id FROM tasks)"],
+  ];
 }
 
 interface TaskRow {
@@ -47,6 +51,7 @@ interface TaskRow {
   blocked_reason: string | null;
   seen_at: number | null;
   seen_by: string | null;
+  urgent: number;
   created_by: string;
   created_at: number;
   done_by: string | null;
@@ -56,7 +61,10 @@ interface TaskRow {
 const SELECT = `SELECT t.id, t.title, t.note, t.assignee_id, a.name AS assignee_name, t.due_on, t.due_time,
     t.remind_at, t.reminded_at, t.recur, t.slot, t.series_id, t.done_photo_key,
     t.blocked_at, t.blocked_by, bb.name AS blocked_by_name, t.blocked_reason,
-    t.seen_at, t.seen_by, sb.name AS seen_by_name,
+    t.seen_at, t.seen_by, sb.name AS seen_by_name, t.urgent,
+    (SELECT COUNT(*) FROM task_comments c WHERE c.task_id = t.id) AS comment_count,
+    (SELECT c.created_at FROM task_comments c WHERE c.task_id = t.id ORDER BY c.created_at DESC LIMIT 1) AS last_comment_at,
+    (SELECT c.author_id FROM task_comments c WHERE c.task_id = t.id ORDER BY c.created_at DESC LIMIT 1) AS last_comment_by,
     t.created_by, cb.name AS created_by_name, t.created_at, t.done_by, db.name AS done_by_name, t.done_at
   FROM tasks t
   LEFT JOIN members a ON a.id = t.assignee_id
@@ -65,8 +73,9 @@ const SELECT = `SELECT t.id, t.title, t.note, t.assignee_id, a.name AS assignee_
   LEFT JOIN members bb ON bb.id = t.blocked_by
   LEFT JOIN members sb ON sb.id = t.seen_by`;
 
-/** API shape: recur is returned as an object (or null), not the stored JSON string. */
-const out = (r: Record<string, unknown> | null) => (r ? { ...r, recur: readRecur(r.recur as string | null) } : null);
+/** API shape: recur is returned as an object (or null), not the stored JSON string; urgent as a boolean. */
+const out = (r: Record<string, unknown> | null) =>
+  r ? { ...r, recur: readRecur(r.recur as string | null), urgent: !!r.urgent } : null;
 
 const validTitle = (v: unknown): v is string =>
   typeof v === "string" && v.trim().length >= 1 && v.trim().length <= MAX_TITLE;
@@ -74,7 +83,7 @@ const validNote = (v: unknown): v is string | null => v === null || (typeof v ==
 const validDate = (v: unknown): v is string | null => v === null || validDateStr(v);
 const validTime = (v: unknown): v is string | null => v === null || validTimeStr(v);
 const validSlot = (v: unknown): v is string | null => v === null || (SLOTS as readonly unknown[]).includes(v);
-const EDIT_KEYS = ["title", "note", "assignee_id", "due_on", "due_time", "recur", "slot"];
+const EDIT_KEYS = ["title", "note", "assignee_id", "due_on", "due_time", "recur", "slot", "urgent"];
 const NANNY_KEYS = new Set(["done", "done_photo_key", "blocked", "seen"]);
 
 async function activeMember(db: D1Database, id: unknown): Promise<boolean> {
@@ -129,7 +138,7 @@ tasks.get("/tasks", requireMember, async (c) => {
   const open = await run(
     SELECT +
       ` WHERE t.done_at IS NULL AND ?1 = ?1${filter}
-        ORDER BY (t.due_on IS NULL), t.due_on ASC, (t.due_time IS NULL), t.due_time ASC, t.created_at ASC`,
+        ORDER BY t.urgent DESC, (t.due_on IS NULL), t.due_on ASC, (t.due_time IS NULL), t.due_time ASC, t.created_at ASC`,
     0,
   );
   const done = await run(
@@ -156,6 +165,8 @@ tasks.post("/tasks", requireMember, requireParent, async (c) => {
   if (!validSlot(slot) || (slot !== null && !recur)) return fail(c, "bad_slot", 400);
   const assignee = b.assignee_id === undefined ? null : b.assignee_id;
   if (assignee !== null && !(await activeMember(c.env.DB, assignee))) return fail(c, "bad_assignee", 400);
+  if (b.urgent !== undefined && typeof b.urgent !== "boolean") return fail(c, "bad_urgent", 400);
+  const urgent = b.urgent === true;
   const t = now();
   const tz = recur || time ? await householdTz(c.env) : "UTC";
   if (recur && !due) due = todayIn(tz, t);
@@ -164,7 +175,7 @@ tasks.post("/tasks", requireMember, requireParent, async (c) => {
   const id = newId();
   await c.env.DB.prepare(
     `INSERT INTO tasks(id, title, note, assignee_id, due_on, due_time, remind_at, reminded_at, recur, slot, series_id,
-       created_by, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)`,
+       created_by, created_at, urgent) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)`,
   )
     .bind(
       id,
@@ -180,10 +191,15 @@ tasks.post("/tasks", requireMember, requireParent, async (c) => {
       recur ? id : null,
       me.id,
       t,
+      urgent ? 1 : 0,
     )
     .run();
   const to = assignee ? (assignee === me.id ? [] : [assignee as string]) : await activeIds(c.env.DB, "nanny");
-  const push: PushIntent | undefined = to.length ? { kind: "task_new", to, actorId: me.id } : undefined;
+  const push: PushIntent | undefined = !to.length
+    ? undefined
+    : urgent
+      ? { kind: "task_urgent", to, actorId: me.id, text: `Urgent from ${me.name}: ${b.title.trim()}` }
+      : { kind: "task_new", to, actorId: me.id };
   await emit(c.env, c.executionCtx, "tasks", push);
   if (remindAt !== null) reschedule(c);
   return c.json({ task: await getTask(c.env.DB, id) });
@@ -225,6 +241,14 @@ tasks.patch("/tasks/:id", requireMember, async (c) => {
   if (b.assignee_id !== undefined) {
     if (b.assignee_id !== null && !(await activeMember(db, b.assignee_id))) return fail(c, "bad_assignee", 400);
     set("assignee_id", b.assignee_id);
+  }
+  let becameUrgent = false;
+  if (b.urgent !== undefined) {
+    if (typeof b.urgent !== "boolean") return fail(c, "bad_urgent", 400);
+    if (b.urgent !== !!row.urgent) {
+      set("urgent", b.urgent ? 1 : 0);
+      becameUrgent = b.urgent && row.done_at === null;
+    }
   }
   if (b.due_on !== undefined && !validDate(b.due_on)) return fail(c, "bad_due_on", 400);
   if (b.due_time !== undefined && !validTime(b.due_time)) return fail(c, "bad_due_time", 400);
@@ -374,11 +398,11 @@ tasks.patch("/tasks/:id", requireMember, async (c) => {
       db
         .prepare(
           `INSERT INTO tasks(id, title, note, assignee_id, due_on, due_time, remind_at, reminded_at, recur, slot, series_id,
-             created_by, created_at)
-           SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13
+             created_by, created_at, urgent)
+           SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?15
            WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE series_id = ?11 AND due_on = ?5 AND done_at IS NULL AND id != ?14)`,
         )
-        .bind(newId(), title, note, assignee, nd, time, ra, rd, JSON.stringify(recur), slot, series, row.created_by, t, id),
+        .bind(newId(), title, note, assignee, nd, time, ra, rd, JSON.stringify(recur), slot, series, row.created_by, t, id, (b.urgent ?? !!row.urgent) ? 1 : 0),
     );
     if (!row.series_id && b.recur === undefined) stmts.push(db.prepare("UPDATE tasks SET series_id = ?1 WHERE id = ?1").bind(id));
   }
@@ -429,6 +453,11 @@ tasks.patch("/tasks/:id", requireMember, async (c) => {
   } else if (becameSeen) {
     const to = await activeIds(db, "parent", me.id);
     if (to.length) push = { kind: "task_seen", to, actorId: me.id, text: `${me.name} will do "${row.title}"` };
+  } else if (becameUrgent) {
+    const assignee = (b.assignee_id !== undefined ? b.assignee_id : row.assignee_id) as string | null;
+    const to = assignee ? (assignee === me.id ? [] : [assignee]) : await activeIds(db, "nanny");
+    const title = b.title !== undefined ? (b.title as string).trim() : row.title;
+    if (to.length) push = { kind: "task_urgent", to, actorId: me.id, text: `Urgent from ${me.name}: ${title}` };
   }
   await emit(c.env, c.executionCtx, "tasks", push);
   if (itemAdded) await emit(c.env, c.executionCtx, "list");
@@ -453,6 +482,7 @@ tasks.delete("/tasks/:id", requireMember, requireParent, async (c) => {
     .bind(...(where[1] as string[]))
     .all<{ id: string; done_photo_key: string | null; remind_at: number | null }>();
   await db.prepare(`DELETE FROM tasks WHERE ${where[0]}`).bind(...(where[1] as string[])).run();
+  await db.prepare("DELETE FROM task_comments WHERE task_id NOT IN (SELECT id FROM tasks)").run();
   for (const v of victims.results) {
     if (!v.done_photo_key) continue;
     try {
@@ -464,6 +494,52 @@ tasks.delete("/tasks/:id", requireMember, requireParent, async (c) => {
   await emit(c.env, c.executionCtx, "tasks");
   if (victims.results.some((v) => v.remind_at !== null)) reschedule(c);
   return c.json({ ok: true, deleted: victims.results.length });
+});
+
+// ---- questions: a short thread on one task ----
+
+const COMMENT_SELECT = `SELECT c.id, c.task_id, c.author_id, m.name AS author_name, c.body, c.created_at
+  FROM task_comments c LEFT JOIN members m ON m.id = c.author_id`;
+
+tasks.get("/tasks/:id/comments", requireMember, async (c) => {
+  const id = c.req.param("id");
+  if (!(await c.env.DB.prepare("SELECT 1 FROM tasks WHERE id = ?1").bind(id).first())) return fail(c, "not_found", 404);
+  const { results } = await c.env.DB.prepare(COMMENT_SELECT + " WHERE c.task_id = ?1 ORDER BY c.created_at ASC, c.id ASC")
+    .bind(id)
+    .all();
+  return c.json({ comments: results });
+});
+
+tasks.post("/tasks/:id/comments", requireMember, async (c) => {
+  const id = c.req.param("id");
+  const me = c.get("me");
+  const b = await readJson(c);
+  const body = typeof b.body === "string" ? b.body.trim() : "";
+  if (!body || body.length > MAX_COMMENT) return fail(c, "bad_body", 400);
+  const db = c.env.DB;
+  const task = await db.prepare("SELECT title, assignee_id FROM tasks WHERE id = ?1").bind(id).first<{
+    title: string;
+    assignee_id: string | null;
+  }>();
+  if (!task) return fail(c, "not_found", 404);
+  const cid = newId();
+  await db
+    .prepare("INSERT INTO task_comments(id, task_id, author_id, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)")
+    .bind(cid, id, me.id, body, now())
+    .run();
+  // Parents always hear; so does whoever the task is for (every helper when it is for anyone).
+  const to = [
+    ...(await activeIds(db, "parent", me.id)),
+    ...(task.assignee_id ? [task.assignee_id] : await activeIds(db, "nanny", me.id)),
+  ];
+  const short = body.length > 100 ? body.slice(0, 99) + "…" : body;
+  await emit(c.env, c.executionCtx, "tasks", {
+    kind: "task_comment",
+    to,
+    actorId: me.id,
+    text: `${me.name} on "${task.title}": ${short}`,
+  });
+  return c.json({ comment: await db.prepare(COMMENT_SELECT + " WHERE c.id = ?1").bind(cid).first() });
 });
 
 export default tasks;

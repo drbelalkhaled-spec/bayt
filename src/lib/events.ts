@@ -4,7 +4,7 @@ import { deliver } from "./push";
 export type Scope = "list" | "tasks" | "chat" | "members";
 
 export interface PushIntent {
-  kind: "item" | "task_new" | "task_seen" | "task_done" | "chat" | "task_blocked" | "reminder" | "shopping";
+  kind: "item" | "task_new" | "task_urgent" | "task_comment" | "task_seen" | "task_done" | "chat" | "task_blocked" | "reminder" | "shopping";
   to: string[];
   actorId: string;
   /** Optional notice text; a default is built from kind + actor name when absent. */

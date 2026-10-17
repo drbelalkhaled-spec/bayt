@@ -133,6 +133,8 @@ function routeFor(kind?: string): string {
     case "chat":
       return "/#/chat";
     case "task_new":
+    case "task_urgent":
+    case "task_comment":
     case "task_seen":
     case "task_done":
     case "task_blocked":
@@ -181,6 +183,9 @@ self.addEventListener("push", (e) => {
         badge: "/icons/icon-192.png",
         tag: notice?.kind || "bayt",
         renotify: true,
+        // Urgent tasks stay on screen until dismissed and buzz harder.
+        requireInteraction: notice?.kind === "task_urgent",
+        vibrate: notice?.kind === "task_urgent" ? [300, 120, 300, 120, 300] : undefined,
         data: { url },
       } as NotificationOptions);
     })(),

@@ -50,6 +50,8 @@ interface TaskLite {
   blocked_at: number | null;
   seen_by: string | null;
   seen_at: number | null;
+  last_comment_at: number | null;
+  last_comment_by: string | null;
 }
 
 /** Count what others did after `since`. Read receipts, ticks and edits also emit events, so we recount rather than add 1. */
@@ -71,7 +73,11 @@ const COUNTERS: Record<Route, (since: number, meId: string | undefined) => Promi
     const blocked = (t: TaskLite) => parent && !!t.blocked_at && t.blocked_at > since && t.blocked_by !== meId;
     const seen = (t: TaskLite) => parent && !!t.seen_at && t.seen_at > since && t.seen_by !== meId;
     const finished = (t: TaskLite) => parent && !!t.done_at && t.done_at > since && t.done_by !== meId;
-    return open.filter((t) => isNew(t) || blocked(t) || seen(t)).length + done.filter(finished).length;
+    // Everyone: questions or answers others wrote on tasks they can see.
+    const asked = (t: TaskLite) =>
+      !!t.last_comment_at && t.last_comment_at > since && t.last_comment_by !== meId &&
+      (parent || t.assignee_id === null || t.assignee_id === meId);
+    return open.filter((t) => isNew(t) || blocked(t) || seen(t) || asked(t)).length + done.filter((t) => finished(t) || asked(t)).length;
   },
 };
 

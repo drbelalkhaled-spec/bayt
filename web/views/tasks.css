@@ -17,6 +17,18 @@
 .task-actions .ok-btn { color: var(--chalk-blue); border-color: var(--chalk-blue); }
 .ok-btn:active { background: rgba(159, 211, 230, .15); }
 .card.task .posted { color: var(--chalk-faint); font-size: 13px; margin-block-start: 2px; }
+.chip.urgent { color: #FF8A8A; border: 2px solid #FF8A8A; font-weight: 700; }
+.card.task.is-urgent { border-color: #FF8A8A; border-style: solid; }
+.urgent-row span { color: #FF8A8A; }
+.chip.q-btn { cursor: pointer; background: none; font: inherit; font-size: 14px; }
+.chip.q-btn.unread { color: var(--chalk-yellow); border-color: var(--chalk-yellow); font-weight: 700; }
+.task-done .chip.q-btn { align-self: center; }
+.q-list { display: flex; flex-direction: column; gap: 8px; max-block-size: 45vh; overflow-y: auto; }
+.q-msg { align-self: flex-start; max-inline-size: 85%; padding: 6px 10px; border: 1.5px solid var(--chalk-line); border-radius: var(--radius-sm); }
+.q-msg.mine { align-self: flex-end; border-color: var(--chalk-blue); }
+.q-head { font-size: 13px; color: var(--chalk-faint); }
+.q-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.q-empty { text-align: center; }
 .chip.seen { color: var(--chalk-blue); border-color: var(--chalk-blue); }
 .chip.unseen { border-style: dashed; }
 .card.task.is-blocked { border-color: var(--chalk-pink); }

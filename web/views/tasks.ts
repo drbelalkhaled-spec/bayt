@@ -1,8 +1,10 @@
 import { ApiError, api, isQueued } from "../lib/api";
 import { add, clear, h } from "../lib/dom";
 import { compressImage, mediaUrl, pickImage, uploadMedia } from "../lib/media";
+import { onEvent } from "../lib/live";
 import { onOutboxChange, queuedEntries, queuedIds } from "../lib/outbox";
 import { isParent, session } from "../lib/session";
+import { kvGet, kvSet } from "../lib/store";
 import { confirmDialog, openSheet, timeAgo, toast } from "../lib/ui";
 import "./views.css";
 import "./tasks.css";
@@ -38,6 +40,9 @@ let gen = 0;
 /** Task ids with a change still waiting in the offline outbox. */
 let waiting = new Set<string>();
 let unsubOutbox: (() => void) | null = null;
+/** When this device last opened each task's questions (task id -> ms), so new replies stand out. */
+let readQs: Record<string, number> = {};
+const READ_QS_KEY = "taskQsRead";
 
 const BLOCK_CHIPS = ["Out of supplies", "No time", "Need help", "Kids needed me"];
 
@@ -224,6 +229,7 @@ function openCard(t: Task): HTMLElement {
   const meta = h(
     "div",
     { class: "meta" },
+    t.urgent ? h("span", { class: "chip urgent" }, "🔴 Urgent") : null,
     h("span", { class: "chip" }, t.assignee_name || "Anyone"),
     due ? h("span", { class: "chip" + (due.overdue ? " overdue" : "") }, due.label + (t.due_time ? " · " + t.due_time : "")) : null,
     t.recur ? recurChip(t.recur) : null,
@@ -232,6 +238,7 @@ function openCard(t: Task): HTMLElement {
       : parent && t.assignee_id !== meId()
         ? h("span", { class: "chip unseen" }, "Waiting for OK")
         : null,
+    questionsChip(t),
     waiting.has(t.id) ? WAIT_CHIP() : null,
   );
   const blocked = t.blocked_at
@@ -285,7 +292,7 @@ function openCard(t: Task): HTMLElement {
     add(actions, h("button", { class: "done-btn", type: "button", "aria-label": "Mark done: " + t.title, onclick: () => void setDone(t.id, true) }, "✓", h("span", null, "Done")));
   if (canBlock(t))
     add(actions, h("button", { class: "cant-btn", type: "button", "aria-label": "Can't do: " + t.title, onclick: () => openBlockSheet(t) }, "Can't do"));
-  return h("div", { class: "card task" + (t.blocked_at ? " is-blocked" : ""), "data-id": t.id }, body, actions);
+  return h("div", { class: "card task" + (t.blocked_at ? " is-blocked" : "") + (t.urgent ? " is-urgent" : ""), "data-id": t.id }, body, actions);
 }
 
 function doneCard(t: Task): HTMLElement {
@@ -306,11 +313,121 @@ function doneCard(t: Task): HTMLElement {
       h("div", { class: "t-title struck" }, t.title),
       h("div", { class: "sub" }, `done by ${who(t.done_by, t.done_by_name)} · ${t.done_at ? timeAgo(t.done_at) : ""}`, waiting.has(t.id) ? " · ⏳ waiting to sync" : null),
     ),
+    t.comment_count ? questionsChip(t) : null,
     !t.done_photo_key && canPhoto(t)
       ? h("button", { class: "btn small ghost photo-add", type: "button", "aria-label": "Add photo: " + t.title, onclick: () => void addPhoto(t.id) }, "📷")
       : null,
     canUndo(t) ? h("button", { class: "btn small", type: "button", onclick: () => void setDone(t.id, false) }, "Undo") : null,
   );
+}
+
+const hasNewQs = (t: Task): boolean =>
+  !!t.last_comment_at && t.last_comment_by !== meId() && t.last_comment_at > (readQs[t.id] ?? 0);
+
+/** "💬 Ask" / "💬 2" on a task; highlighted when someone else wrote since this device last looked. */
+function questionsChip(t: Task): HTMLElement {
+  const fresh = hasNewQs(t);
+  return h(
+    "button",
+    {
+      class: "chip q-btn" + (fresh ? " unread" : ""),
+      type: "button",
+      "aria-label": (t.comment_count ? `Questions (${t.comment_count}${fresh ? ", new" : ""}): ` : "Ask about: ") + t.title,
+      onclick: (e: Event) => {
+        e.stopPropagation();
+        openQuestions(t);
+      },
+    },
+    t.comment_count ? `💬 ${t.comment_count}${fresh ? " new" : ""}` : "💬 Ask",
+  );
+}
+
+interface TaskComment {
+  id: string;
+  author_id: string;
+  author_name: string | null;
+  body: string;
+  created_at: number;
+}
+
+function markQsRead(id: string): void {
+  readQs = { ...readQs, [id]: Date.now() };
+  void kvSet(READ_QS_KEY, readQs).catch(() => undefined);
+}
+
+/** The question thread for one task: everyone can ask and answer. */
+function openQuestions(t: Task): void {
+  let unsub: (() => void) | null = null;
+  const sheet = openSheet("Questions", () => {
+    unsub?.();
+    markQsRead(t.id);
+    render(true);
+  });
+  const list = h("div", { class: "q-list", role: "log", "aria-live": "polite" });
+  const input = h("textarea", { class: "input", rows: 2, maxLength: 500, required: true, placeholder: "Ask or answer…", "aria-label": "Your question or answer" });
+  const err = h("p", { class: "error", role: "alert" });
+  const send = h("button", { class: "btn primary", type: "submit" }, "Send");
+  let comments: TaskComment[] = [];
+  const paint = (): void => {
+    clear(list);
+    if (!comments.length) add(list, h("p", { class: "muted q-empty" }, "No questions yet. Ask anything about this task."));
+    for (const c of comments) {
+      const mine = c.author_id === meId();
+      add(
+        list,
+        h(
+          "div",
+          { class: "q-msg" + (mine ? " mine" : "") },
+          h("div", { class: "q-head" }, who(c.author_id, c.author_name), " · ", timeAgo(c.created_at)),
+          h("div", { class: "q-body" }, c.body),
+        ),
+      );
+    }
+    list.scrollTop = list.scrollHeight;
+  };
+  const loadQs = async (): Promise<void> => {
+    try {
+      comments = (await api<{ comments: TaskComment[] }>(`/api/tasks/${t.id}/comments`)).comments;
+      paint();
+      markQsRead(t.id);
+    } catch (e) {
+      err.textContent = errMsg(e);
+    }
+  };
+  unsub = onEvent((e) => {
+    if (e.type === "changed" && e.scope === "tasks") void loadQs();
+  });
+  const form = h(
+    "form",
+    {
+      class: "stack",
+      onsubmit: async (e: Event) => {
+        e.preventDefault();
+        const body = input.value.trim();
+        if (!body) return;
+        send.disabled = true;
+        err.textContent = "";
+        try {
+          const r = await api<{ comment: TaskComment }>(`/api/tasks/${t.id}/comments`, { method: "POST", body: { body } });
+          if (!comments.some((c) => c.id === r.comment.id)) comments = [...comments, r.comment];
+          input.value = "";
+          paint();
+          markQsRead(t.id);
+          reconcile();
+        } catch (ex) {
+          err.textContent = errMsg(ex);
+        } finally {
+          send.disabled = false;
+        }
+      },
+    },
+    h("label", { class: "field" }, input),
+    err,
+    h("div", { class: "actions" }, h("button", { class: "btn", type: "button", onclick: () => sheet.close() }, "Close"), send),
+  );
+  add(sheet.body, h("p", { class: "muted block-task" }, t.title), list, form);
+  paint();
+  void loadQs();
 }
 
 function openViewer(key: string, title: string): void {
@@ -581,6 +698,8 @@ function openEditor(t: Task | null): void {
   const due = h("input", { class: "input dt", type: "date", value: t?.due_on ?? "", "aria-label": "Due date" });
   const time = h("input", { class: "input dt", type: "time", value: t?.due_time ?? "", "aria-label": "Time" });
   const repeat = repeatControl(t?.recur ?? null);
+  const urgent = h("input", { type: "checkbox", "aria-label": "Urgent" });
+  urgent.checked = !!t?.urgent;
   const err = h("p", { class: "error", role: "alert" });
   const save = h("button", { class: "btn primary", type: "submit" }, t ? "Save" : "Add");
   const actions = h("div", { class: "actions" });
@@ -621,6 +740,7 @@ function openEditor(t: Task | null): void {
           due_on: due.value || null,
           due_time: time.value || null,
           recur,
+          urgent: urgent.checked,
         };
         if (recur && !due.value) body.due_on = todayStr();
         save.disabled = true;
@@ -645,6 +765,7 @@ function openEditor(t: Task | null): void {
       h("label", { class: "field" }, h("span", null, "Time (optional)"), time),
     ),
     h("div", { class: "field" }, h("span", null, "Repeat"), repeat.el),
+    h("label", { class: "check-row urgent-row" }, urgent, h("span", null, "🔴 Urgent — goes to the top; the alert stays on screen until opened")),
     err,
     actions,
   );
@@ -698,6 +819,12 @@ export function mount(el: HTMLElement): () => void {
     paintSeg();
   }
   el.replaceChildren(h("div", { class: "view" }, head, bodyEl));
+  void kvGet<Record<string, number>>(READ_QS_KEY)
+    .then((v) => {
+      readQs = v && typeof v === "object" ? v : {};
+      render(true);
+    })
+    .catch(() => undefined);
   void load().catch((e) => toast(errMsg(e), true));
   tick = setInterval(() => render(true), 60000);
   unsubOutbox = onOutboxChange(() => render());
