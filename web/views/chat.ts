@@ -81,6 +81,8 @@ let msgs: Msg[] = [];
 let reads: ReadRow[] = [];
 let pinned: PinnedMsg[] = [];
 let reactions: Reaction[] = [];
+/** My pending "remind me" times by message id. */
+const myReminders = new Map<string, number>();
 /** The message being answered; shown above the composer until sent or cancelled. */
 let replyTo: Msg | null = null;
 let replyBar: HTMLElement | null = null;
@@ -759,6 +761,111 @@ function scrollToMsg(id: string): boolean {
   return true;
 }
 
+/** The time of my pending reminder on a message, or null. */
+const reminderAt = (id: string): number | null => {
+  const at = myReminders.get(id);
+  return at !== undefined && at > Date.now() ? at : null;
+};
+
+function whenText(at: number): string {
+  const d = new Date(at);
+  const day = new Date();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === day.toDateString()) return "today " + time;
+  day.setDate(day.getDate() + 1);
+  if (d.toDateString() === day.toDateString()) return "tomorrow " + time;
+  return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }) + " " + time;
+}
+
+/** A local date-time as the value of a datetime-local input ("2026-01-31T18:00"). */
+function localInputValue(ms: number): string {
+  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
+  return d.toISOString().slice(0, 16);
+}
+
+function openRemindSheet(m: Msg): void {
+  const sheet = openSheet("Remind me");
+  const set = async (at: number) => {
+    try {
+      await api("/api/messages/" + m.id + "/remind", { method: "PUT", body: { at } });
+      myReminders.set(m.id, at);
+      sheet.close();
+      toast("Reminder set for " + whenText(at));
+    } catch (e) {
+      toast(e instanceof ApiError && e.code === "bad_at" ? "Pick a time in the future (within 30 days)" : errMsg(e), true);
+    }
+  };
+  const at = (hour: number, daysAhead: number): number => {
+    const d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    d.setHours(hour, 0, 0, 0);
+    return d.getTime();
+  };
+  const choices: [string, number][] = [["In 1 hour", Date.now() + 3_600_000]];
+  choices.push(new Date().getHours() < 18 ? ["This evening (6 PM)", at(18, 0)] : ["Tomorrow evening (6 PM)", at(18, 1)]);
+  choices.push(["Tomorrow morning (9 AM)", at(9, 1)]);
+  for (const [label, t] of choices) add(sheet.body, h("button", { class: "btn block", type: "button", onclick: () => void set(t) }, label));
+  const input = h("input", {
+    class: "input",
+    type: "datetime-local",
+    min: localInputValue(Date.now() + 60_000),
+    value: localInputValue(Date.now() + 3_600_000),
+    "aria-label": "Custom time",
+  });
+  add(
+    sheet.body,
+    h(
+      "form",
+      {
+        class: "stack",
+        onsubmit: (e: Event) => {
+          e.preventDefault();
+          const t = new Date(input.value).getTime();
+          if (Number.isNaN(t) || t < Date.now() + 60_000) return void toast("Pick a time in the future", true);
+          void set(t);
+        },
+      },
+      field("Or pick a time", input),
+      h("div", { class: "actions" }, h("button", { class: "btn primary", type: "submit" }, "Set")),
+    ),
+  );
+  if (reminderAt(m.id) !== null) {
+    add(
+      sheet.body,
+      h(
+        "button",
+        {
+          class: "btn block danger",
+          type: "button",
+          onclick: () => {
+            void api("/api/messages/" + m.id + "/remind", { method: "DELETE" })
+              .then(() => {
+                myReminders.delete(m.id);
+                sheet.close();
+                toast("Reminder cancelled");
+              })
+              .catch((e) => toast(errMsg(e), true));
+          },
+        },
+        "Cancel reminder",
+      ),
+    );
+  }
+}
+
+/** "Seen by" / "Not seen yet" lines for one of my own messages. */
+function seenBy(m: Msg): HTMLElement | null {
+  const others = session.members.filter((x) => x.id !== session.me?.id);
+  if (!others.length) return null;
+  const hasSeen = (id: string): boolean => reads.some((r) => r.member_id === id && r.read_at >= m.created_at);
+  const seen = others.filter((x) => hasSeen(x.id)).map((x) => x.name);
+  const not = others.filter((x) => !hasSeen(x.id)).map((x) => x.name);
+  const lines: string[] = [];
+  if (seen.length) lines.push("Seen by: " + seen.join(", "));
+  if (not.length) lines.push(seen.length ? "Not seen yet: " + not.join(", ") : "Not seen yet");
+  return h("div", { class: "muted act-seen" }, ...lines.map((l) => h("p", null, l)));
+}
+
 function openActions(m: Msg): void {
   const sheet = openSheet("Message");
   const isPinned = pinned.some((p) => p.id === m.id);
@@ -778,6 +885,8 @@ function openActions(m: Msg): void {
         label,
       ),
     );
+  const seenEl = isMine(m) && !m.local ? seenBy(m) : null;
+  if (seenEl) add(sheet.body, seenEl);
   add(sheet.body, h("p", { class: "muted act-preview" }, oneLine(preview(m), 140)));
   if (!m.local) {
     const myEmoji = reactions.find((r) => r.message_id === m.id && r.member_id === session.me?.id)?.emoji ?? null;
@@ -809,6 +918,10 @@ function openActions(m: Msg): void {
   if (m.body) {
     act("\u{1F6D2} Add to shopping list", () => openAddToList(m));
     if (isParent()) act("✅ Make a task", () => openMakeTask(m));
+  }
+  if (!m.local) {
+    const rem = reminderAt(m.id);
+    act(rem === null ? "⏰ Remind me" : `⏰ Reminder: ${whenText(rem)} · change`, () => openRemindSheet(m));
   }
   act(isPinned ? "\u{1F4CC} Unpin" : "\u{1F4CC} Pin", () => void setPinned(m, !isPinned));
   if (canEdit(m)) act("✏️ Edit", () => openEditMsg(m));
@@ -972,6 +1085,17 @@ function autoGrow(ta: HTMLTextAreaElement): void {
   const lh = parseFloat(cs.lineHeight) || 22;
   const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
   ta.style.height = Math.min(ta.scrollHeight, lh * MAX_LINES + pad) + "px";
+}
+
+async function loadReminders(my: number): Promise<void> {
+  try {
+    const r = await api<{ reminders: { message_id: string; remind_at: number }[] }>("/api/reminders");
+    if (my !== gen) return;
+    myReminders.clear();
+    for (const x of r.reminders) myReminders.set(x.message_id, x.remind_at);
+  } catch {
+    /* offline: the action just reads "Remind me" */
+  }
 }
 
 export function mount(el: HTMLElement): () => void {
@@ -1227,6 +1351,7 @@ export function mount(el: HTMLElement): () => void {
     h("div", { class: "view chat" }, h("div", { class: "chat-top" }, pinBar, searchBtn), h("div", { class: "msgs-wrap" }, msgsEl, pillEl), typingEl, replyBar, form, recBar),
   );
   void loadInitial().catch((e) => toast(errMsg(e), true));
+  void loadReminders(gen);
 
   return () => {
     gen++;

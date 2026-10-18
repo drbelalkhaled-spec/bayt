@@ -117,6 +117,8 @@ export function defaultText(kind: PushIntent["kind"], actor: string): string {
       return `${actor} couldn't do a task`;
     case "reminder":
       return "Reminder: a task is due soon";
+    case "msg_reminder":
+      return "Reminder about a chat message";
     case "shopping":
       return `${actor} is going shopping`;
     default:
