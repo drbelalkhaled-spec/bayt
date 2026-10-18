@@ -8,9 +8,14 @@ const BATCH = 50;
 
 const PENDING = "remind_at IS NOT NULL AND reminded_at IS NULL AND done_at IS NULL AND blocked_at IS NULL";
 
-/** Earliest pending reminder time, or null when nothing is pending. */
+/** Earliest pending task or message reminder time, or null when nothing is pending. */
 export async function nextReminderAt(env: Env): Promise<number | null> {
-  const row = await env.DB.prepare(`SELECT MIN(remind_at) AS t FROM tasks WHERE ${PENDING}`).first<{ t: number | null }>();
+  const row = await env.DB.prepare(
+    `SELECT MIN(t) AS t FROM (
+       SELECT MIN(remind_at) AS t FROM tasks WHERE ${PENDING}
+       UNION ALL SELECT MIN(remind_at) FROM message_reminders WHERE sent_at IS NULL
+     )`,
+  ).first<{ t: number | null }>();
   return row?.t ?? null;
 }
 
@@ -26,6 +31,51 @@ export async function scheduleReminders(env: Env): Promise<void> {
   } catch (e) {
     console.error("scheduleReminders failed", e);
   }
+}
+
+interface DueMessageRow {
+  id: string;
+  member_id: string;
+  body: string | null;
+  kind: string | null;
+  author_name: string | null;
+}
+
+const oneLine = (s: string, max: number): string => s.replace(/\s+/g, " ").trim().slice(0, max);
+
+/**
+ * Sends every due "remind me" on a chat message to the member who set it, once (claims sent_at first).
+ * A message deleted meanwhile is marked sent and skipped. Returns how many were claimed. Used by the DO alarm.
+ */
+export async function sendDueMessageReminders(env: Env, t = now()): Promise<number> {
+  const { results } = await env.DB.prepare(
+    `SELECT r.id, r.member_id, m.body, m.kind, a.name AS author_name
+     FROM message_reminders r LEFT JOIN messages m ON m.id = r.message_id LEFT JOIN members a ON a.id = m.author_id
+     WHERE r.sent_at IS NULL AND r.remind_at <= ?1 ORDER BY r.remind_at LIMIT ${BATCH}`,
+  )
+    .bind(t)
+    .all<DueMessageRow>();
+  let sent = 0;
+  for (const r of results) {
+    const claimed = await env.DB.prepare("UPDATE message_reminders SET sent_at = ?1 WHERE id = ?2 AND sent_at IS NULL")
+      .bind(t, r.id)
+      .run();
+    if (!claimed.meta.changes) continue;
+    sent++;
+    if (r.kind === null) continue; // the message is gone
+    const what = r.kind === "photo" ? "📷 Photo" : r.kind === "voice" ? "🎤 Voice note" : oneLine(r.body ?? "", 80);
+    try {
+      await deliver(env, {
+        kind: "msg_reminder",
+        to: [r.member_id],
+        actorId: "system",
+        text: `Reminder: "${what}" — from ${r.author_name || "Someone"}`,
+      });
+    } catch (e) {
+      await reportError(env, "reminders", e);
+    }
+  }
+  return sent;
 }
 
 interface DueRow {

@@ -144,6 +144,7 @@ interface Notice {
 function routeFor(kind?: string): string {
   switch (kind) {
     case "chat":
+    case "msg_reminder":
       return "/#/chat";
     case "task_new":
     case "task_urgent":

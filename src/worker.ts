@@ -9,6 +9,7 @@ import live from "./routes/live";
 import media from "./routes/media";
 import messages from "./routes/messages";
 import push from "./routes/push";
+import remind from "./routes/remind";
 import tasks from "./routes/tasks";
 import trash from "./routes/trash";
 
@@ -24,6 +25,7 @@ app.route("/api", live);
 app.route("/api", push);
 app.route("/api", errors);
 app.route("/api", trash);
+app.route("/api", remind);
 app.all("/api/*", (c) => c.json({ error: "not_found" }, 404));
 app.onError((e, c) => {
   const job = reportError(c.env, `${c.req.method} ${new URL(c.req.url).pathname}`, e);

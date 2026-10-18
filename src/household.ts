@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { reportError } from "./lib/errors";
-import { nextReminderAt, sendDueReminders } from "./lib/reminders";
+import { nextReminderAt, sendDueMessageReminders, sendDueReminders } from "./lib/reminders";
 
 const MAX_FRAME = 1024;
 
@@ -78,18 +78,23 @@ export class Household extends DurableObject<Env> {
     return new Response("Not found", { status: 404 });
   }
 
-  /** Points the alarm at the earliest pending task reminder (or clears it). */
+  /** Points the alarm at the earliest pending task or message reminder (or clears it). */
   private async armReminders(): Promise<void> {
     const t = await nextReminderAt(this.env);
     if (t === null) await this.ctx.storage.deleteAlarm();
     else await this.ctx.storage.setAlarm(Math.max(t, Date.now()));
   }
 
-  /** Task reminders: push each due one once, tell clients, then re-arm for the next pending one. */
+  /** Task and message reminders: push each due one once, tell clients, then re-arm for the next pending one. */
   async alarm(): Promise<void> {
     try {
       const sent = await sendDueReminders(this.env);
       if (sent) this.broadcast({ type: "changed", scope: "tasks" });
+    } catch (e) {
+      await reportError(this.env, "reminders", e);
+    }
+    try {
+      await sendDueMessageReminders(this.env);
     } catch (e) {
       await reportError(this.env, "reminders", e);
     }
