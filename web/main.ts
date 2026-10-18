@@ -383,7 +383,10 @@ async function syncTimezone(): Promise<void> {
     if (!isParent()) return;
     const { tz } = await api<{ tz: string }>("/api/household");
     const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if ((!tz || tz === "UTC") && local && local !== "UTC") await api("/api/household", { method: "PUT", body: { tz: local } });
+    if ((!tz || tz === "UTC") && local && local !== "UTC") {
+      await api("/api/household", { method: "PUT", body: { tz: local } });
+      session.tz = local;
+    }
   } catch {
     /* best effort */
   }

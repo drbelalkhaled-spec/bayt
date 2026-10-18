@@ -142,9 +142,10 @@ tasks.get("/tasks", requireMember, async (c) => {
         ORDER BY t.urgent DESC, (t.due_on IS NULL), t.due_on ASC, (t.due_time IS NULL), t.due_time ASC, t.created_at ASC`,
     0,
   );
+  const tz = await householdTz(c.env);
   const done = await run(
     SELECT + ` WHERE t.done_at IS NOT NULL AND t.done_at >= ?1${filter} ORDER BY t.done_at DESC`,
-    now() - DAY,
+    zonedToEpoch(todayIn(tz, now()), "00:00", tz),
   );
   return c.json({ open: open.results.map(out), done: done.results.map(out) });
 });

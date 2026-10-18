@@ -1,6 +1,7 @@
 // Daily routine: shared task types/helpers and the parents' "Manage routine" sheet.
 import { ApiError, api } from "../lib/api";
 import { add, clear, h } from "../lib/dom";
+import { session } from "../lib/session";
 import { undoToast } from "../lib/trash";
 import { confirmDialog, openSheet, toast } from "../lib/ui";
 
@@ -47,7 +48,23 @@ export const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const pad = (n: number): string => String(n).padStart(2, "0");
 export const ymd = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-export const todayStr = (): string => ymd(new Date());
+let dayFmt: { tz: string | null; f: Intl.DateTimeFormat | null } | null = null;
+/** Today's calendar day in the household time zone (the server's notion of "today"); the device date when that is unknown. */
+export function todayStr(): string {
+  const tz = session.tz;
+  if (!dayFmt || dayFmt.tz !== tz) {
+    let f: Intl.DateTimeFormat | null = null;
+    try {
+      if (tz) f = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
+    } catch {
+      /* unknown zone: fall back to the device date */
+    }
+    dayFmt = { tz, f };
+  }
+  if (!dayFmt.f) return ymd(new Date());
+  const p = Object.fromEntries(dayFmt.f.formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
 export function addDaysStr(date: string, n: number): string {
   const [y, m, d] = date.split("-").map(Number);
   return ymd(new Date(y, m - 1, d + n));
