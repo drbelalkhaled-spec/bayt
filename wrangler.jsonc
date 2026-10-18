@@ -24,7 +24,7 @@
     "bindings": [{ "name": "HOUSEHOLD", "class_name": "Household" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Household"] }],
-  "triggers": { "crons": ["17 3 * * *"] },
+  "triggers": { "crons": ["17 3 * * *", "7 * * * *"] },
   // Keep request logs and errors searchable in the Cloudflare dashboard (Workers -> bayt -> Logs).
   "observability": { "enabled": true }
 }

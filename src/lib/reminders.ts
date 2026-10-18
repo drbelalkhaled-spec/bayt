@@ -1,10 +1,18 @@
 import type { Env } from "../env";
 import { reportError } from "./errors";
 import { deliver } from "./push";
+import { zonedToEpoch } from "./recur";
 import { now } from "./util";
 
 export const REMIND_BEFORE_MS = 15 * 60_000;
 const BATCH = 50;
+
+/** remind_at / reminded_at for a date+time: 15 min before; already-past due moments are marked reminded. */
+export function reminderTimes(due: string | null, time: string | null, tz: string, t: number): [number | null, number | null] {
+  if (!due || !time) return [null, null];
+  const at = zonedToEpoch(due, time, tz);
+  return [at - REMIND_BEFORE_MS, at <= t ? t : null];
+}
 
 const PENDING = "remind_at IS NOT NULL AND reminded_at IS NULL AND done_at IS NULL AND blocked_at IS NULL";
 
