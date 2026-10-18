@@ -5,7 +5,7 @@ import { online } from "../lib/live";
 import { isParent, loadSession, session } from "../lib/session";
 import type { Member } from "../lib/session";
 import { kvGet, kvSet } from "../lib/store";
-import { getTextStyle, setTextStyle, type TextStyle } from "../lib/textstyle";
+import { getTextScale, getTextStyle, setTextScale, setTextStyle, type TextStyle } from "../lib/textstyle";
 import { openTrash } from "../lib/trash";
 import { confirmDialog, openSheet, timeAgo, toast } from "../lib/ui";
 
@@ -106,6 +106,7 @@ export function openSettings(signOut: () => void): void {
     // Notifications + install
     add(body, h("h3", null, "This device"));
     add(body, textStyleRow());
+    add(body, textSizeRow());
     add(body, await notificationsRow());
     if (canInstall()) {
       add(body, 
@@ -354,6 +355,35 @@ function textStyleRow(): HTMLElement {
     "div",
     { class: "row" },
     h("div", { class: "grow" }, h("div", { class: "title" }, "Text style"), h("div", { class: "sub" }, "Simple is easier to read in long lists")),
+    seg,
+  );
+}
+
+/** Makes lists, tasks and chat bigger or smaller (the header and tab bar stay put), for this phone only. */
+function textSizeRow(): HTMLElement {
+  const opts: [number, string, string][] = [
+    [0.9, "A−", "Small"],
+    [1, "A", "Normal"],
+    [1.15, "A+", "Large"],
+    [1.3, "A++", "Larger"],
+  ];
+  const seg = h("div", { class: "seg", role: "group", "aria-label": "Text size" });
+  const paint = (): void => {
+    const cur = getTextScale();
+    for (const b of Array.from(seg.children)) {
+      const on = Number((b as HTMLElement).dataset.v) === cur;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", String(on));
+    }
+  };
+  for (const [v, label, name] of opts) {
+    add(seg, h("button", { type: "button", "data-v": String(v), "aria-label": name, onclick: () => (setTextScale(v), paint()) }, label));
+  }
+  paint();
+  return h(
+    "div",
+    { class: "row" },
+    h("div", { class: "grow" }, h("div", { class: "title" }, "Text size"), h("div", { class: "sub" }, "Makes lists, tasks and chat bigger or smaller on this phone")),
     seg,
   );
 }

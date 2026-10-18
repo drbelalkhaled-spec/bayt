@@ -256,3 +256,6 @@ html[data-style="simple"] .offline-bar, html[data-style="simple"] .update-bar { 
 html[data-style="simple"] .chip, html[data-style="simple"] .pill { color: var(--chalk-dim); }
 .row .seg { inline-size: auto; flex: 0 0 auto; }
 .row .seg button { min-block-size: 36px; padding-inline: 10px; font-size: 16px; }
+
+/* Text size (Settings -> Text size; per device): zoom the content, sheets and store mode; header and tab bar stay fixed. */
+.main, .sheet, .store-overlay { zoom: var(--text-scale, 1); }
