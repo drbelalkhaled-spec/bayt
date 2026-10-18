@@ -153,7 +153,7 @@ const listMembers = async (db: D1Database) =>
     .results;
 
 auth.get("/me", requireMember, async (c) =>
-  c.json({ member: publicMember(c.get("me")), members: await listMembers(c.env.DB) }),
+  c.json({ member: publicMember(c.get("me")), members: await listMembers(c.env.DB), tz: await householdTz(c.env) }),
 );
 
 auth.patch("/me", requireMember, async (c) => {

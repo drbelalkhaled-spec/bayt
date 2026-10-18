@@ -9,15 +9,17 @@ const DAY = 24 * H;
 
 beforeEach(resetDb);
 
-async function insertDone(by: string, ageMs: number, title = "old") {
+async function insertDoneAt(by: string, at: number, title = "old") {
   const id = crypto.randomUUID();
   await env.DB.prepare(
     "INSERT INTO tasks(id, title, created_by, created_at, done_by, done_at) VALUES (?1,?2,?3,?4,?3,?5)",
   )
-    .bind(id, title, by, Date.now() - ageMs - H, Date.now() - ageMs)
+    .bind(id, title, by, at - H, at)
     .run();
   return id;
 }
+
+const insertDone = (by: string, ageMs: number, title = "old") => insertDoneAt(by, Date.now() - ageMs, title);
 
 describe("tasks", () => {
   it("nanny cannot create, delete or edit title", async () => {
@@ -64,13 +66,34 @@ describe("tasks", () => {
     expect(l.json.done).toHaveLength(0);
   });
 
-  it("hides tasks done more than 24h ago", async () => {
+  it("hides tasks done before today", async () => {
     const { dad } = await makeHousehold();
     await insertDone(dad.id, 25 * H);
-    const fresh = await insertDone(dad.id, 1 * H, "fresh");
+    const fresh = await insertDone(dad.id, 0, "fresh");
     const l = await api("/api/tasks", { token: dad.token });
     expect(l.json.open).toHaveLength(0);
     expect(l.json.done.map((x: any) => x.id)).toEqual([fresh]);
+  });
+
+  it.each(["Pacific/Auckland", "America/Los_Angeles"])("'done' starts at local midnight in %s", async (tz) => {
+    const { dad, nanny } = await makeHousehold();
+    expect((await api("/api/household", { method: "PUT", token: dad.token, body: { tz } })).status).toBe(200);
+    const midnight = zonedToEpoch(todayIn(tz, Date.now()), "00:00", tz);
+    const before = await insertDoneAt(dad.id, midnight - 1000, "before");
+    const after = await insertDoneAt(dad.id, midnight + 1000, "after");
+    for (const q of ["", "?mine=1"]) {
+      const l = await api("/api/tasks" + q, { token: nanny.token });
+      const ids = l.json.done.map((x: any) => x.id);
+      expect(ids).toContain(after);
+      expect(ids).not.toContain(before);
+    }
+  });
+
+  it("/api/me returns the household tz", async () => {
+    const { dad, nanny } = await makeHousehold();
+    expect((await api("/api/me", { token: nanny.token })).json.tz).toBe("UTC");
+    await api("/api/household", { method: "PUT", token: dad.token, body: { tz: "Pacific/Auckland" } });
+    expect((await api("/api/me", { token: nanny.token })).json.tz).toBe("Pacific/Auckland");
   });
 
   it("validates input and 404s", async () => {
