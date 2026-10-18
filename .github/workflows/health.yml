@@ -1,0 +1,28 @@
+# Checks that the live site actually works. It runs after every successful
+# Cloudflare deploy ("Workers Builds" check run) and every 6 hours. If it fails,
+# GitHub emails the repository owner about the failed run.
+name: Live health check
+
+on:
+  check_run:
+    types: [completed]
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    # check_run fires for every check on the repo: only react to a successful
+    # Cloudflare deploy. Schedule and manual runs always go ahead.
+    if: github.event_name != 'check_run' || (startsWith(github.event.check_run.name, 'Workers Builds') && github.event.check_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: node tools/health-check.mjs https://bayt.dr-belal-khaled.workers.dev
