@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { reportError } from "./errors";
 import type { PushIntent } from "./events";
-import { now } from "./util";
+import { newId, now } from "./util";
 
 /** Contact URI put in the VAPID JWT `sub` claim. CHANGE THIS to a real mailto:/https: contact before launch. */
 export const VAPID_SUBJECT = "https://bayt.dr-belal-khaled.workers.dev";
@@ -26,6 +26,12 @@ export interface Notice {
   actorName: string;
   text: string;
   at: number;
+  ref?: string | null;
+}
+
+export interface Device {
+  id: string;
+  endpoint: string;
 }
 
 /** Loads the VAPID key pair, generating and persisting it on first use (race-safe). */
@@ -63,28 +69,20 @@ export async function vapidJwt(aud: string, vapid: Vapid): Promise<string> {
 }
 
 /**
- * Content-free push ("knock"): wakes the device; the service worker then fetches /api/push/notice.
- * On 404/410 the stored subscription is cleared. Best-effort; returns true when the push service accepted it.
+ * Content-free push ("knock"): wakes the device; the service worker then fetches /api/push/notices.
+ * On 404/410 that device's row is deleted. Best-effort; returns true when the push service accepted it.
  */
-export async function sendPush(
-  env: Env,
-  recipient: { id: string; push_sub: string | null },
-  vapid?: Vapid,
-  report = true,
-): Promise<boolean> {
+export async function sendPush(env: Env, device: Device, vapid?: Vapid, report = true): Promise<boolean> {
   try {
-    if (!recipient.push_sub) return false;
-    const sub = JSON.parse(recipient.push_sub) as { endpoint?: string };
-    if (!sub.endpoint) return false;
     const v = vapid ?? (await ensureVapid(env));
-    const jwt = await vapidJwt(new URL(sub.endpoint).origin, v);
-    const r = await fetch(sub.endpoint, {
+    const jwt = await vapidJwt(new URL(device.endpoint).origin, v);
+    const r = await fetch(device.endpoint, {
       method: "POST",
       headers: { Authorization: `vapid t=${jwt}, k=${v.pub}`, TTL: "86400", Urgency: "high" },
     });
     await r.body?.cancel();
     if (r.status === 404 || r.status === 410) {
-      await env.DB.prepare("UPDATE members SET push_sub = NULL WHERE id = ?1").bind(recipient.id).run();
+      await env.DB.prepare("DELETE FROM push_devices WHERE id = ?1").bind(device.id).run();
       return false;
     }
     // Anything else means notifications are silently not arriving: worth telling a parent.
@@ -126,22 +124,39 @@ export function defaultText(kind: PushIntent["kind"], actor: string): string {
   }
 }
 
+/** Adds one notice for a member. `at` is strictly increasing per member, so a device cursor never skips a notice. */
 export async function storeNotice(env: Env, memberId: string, n: Notice): Promise<void> {
-  await env.DB.prepare("INSERT INTO config(k, v) VALUES(?1, ?2) ON CONFLICT(k) DO UPDATE SET v = excluded.v")
-    .bind("notice:" + memberId, JSON.stringify(n))
+  await env.DB.prepare(
+    `INSERT INTO notices(id, member_id, kind, text, actor_name, ref, at)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, MAX(?7, COALESCE(MAX(at), 0) + 1) FROM notices WHERE member_id = ?2`,
+  )
+    .bind(newId(), memberId, n.kind, n.text, n.actorName, n.ref ?? null, n.at)
     .run();
 }
 
+/** The member's latest notice (what old service workers ask for). */
 export async function readNotice(env: Env, memberId: string): Promise<Notice | null> {
-  const row = await env.DB.prepare("SELECT v FROM config WHERE k = ?1")
-    .bind("notice:" + memberId)
-    .first<{ v: string }>();
-  if (!row) return null;
-  try {
-    return JSON.parse(row.v) as Notice;
-  } catch {
-    return null;
-  }
+  const row = await env.DB.prepare(
+    "SELECT kind, text, actor_name, ref, at FROM notices WHERE member_id = ?1 ORDER BY at DESC, rowid DESC LIMIT 1",
+  )
+    .bind(memberId)
+    .first<{ kind: Notice["kind"]; text: string; actor_name: string; ref: string | null; at: number }>();
+  return row ? { kind: row.kind, text: row.text, actorName: row.actor_name, ref: row.ref, at: row.at } : null;
+}
+
+/** Knocks every given device; true when at least one push service accepted it. */
+export async function sendDevices(env: Env, devices: Device[], vapid?: Vapid, report = true): Promise<boolean> {
+  const v = vapid ?? (devices.length ? await ensureVapid(env) : undefined);
+  const sent = await Promise.all(devices.map((d) => sendPush(env, d, v, report)));
+  return sent.some(Boolean);
+}
+
+/** Knocks all devices of one member. */
+export async function pushMember(env: Env, memberId: string, vapid?: Vapid, report = true): Promise<boolean> {
+  const { results } = await env.DB.prepare("SELECT id, endpoint FROM push_devices WHERE member_id = ?1")
+    .bind(memberId)
+    .all<Device>();
+  return sendDevices(env, results, vapid, report);
 }
 
 /** Atomic throttle claim: true when this (member, kind) may send now (nothing sent in the last `every` ms). */
@@ -160,11 +175,14 @@ export async function deliver(env: Env, intent: PushIntent): Promise<void> {
   if (!ids.length) return;
   const ph = ids.map((_, i) => "?" + (i + 1)).join(",");
   const { results } = await env.DB.prepare(
-    `SELECT id, push_sub FROM members WHERE id IN (${ph}) AND removed_at IS NULL AND push_sub IS NOT NULL`,
+    `SELECT d.id, d.member_id, d.endpoint FROM push_devices d JOIN members m ON m.id = d.member_id
+     WHERE d.member_id IN (${ph}) AND m.removed_at IS NULL`,
   )
     .bind(...ids)
-    .all<{ id: string; push_sub: string }>();
+    .all<Device & { member_id: string }>();
   if (!results.length) return;
+  const devices = new Map<string, Device[]>();
+  for (const d of results) devices.set(d.member_id, [...(devices.get(d.member_id) ?? []), { id: d.id, endpoint: d.endpoint }]);
   const actor = await env.DB.prepare("SELECT name FROM members WHERE id = ?1")
     .bind(intent.actorId)
     .first<{ name: string }>();
@@ -174,11 +192,11 @@ export async function deliver(env: Env, intent: PushIntent): Promise<void> {
   const t = now();
   const throttled = intent.kind === "item" || intent.kind === "shopping" || intent.kind === "chat" || intent.kind === "task_seen";
   await Promise.all(
-    results.map(async (m) => {
+    [...devices].map(async ([memberId, list]) => {
       try {
-        await storeNotice(env, m.id, { kind: intent.kind, actorName, text, at: t });
-        if (throttled && !(await claim(env, m.id, intent.kind, t))) return;
-        await sendPush(env, m, vapid);
+        await storeNotice(env, memberId, { kind: intent.kind, actorName, text, at: t, ref: intent.ref });
+        if (throttled && !(await claim(env, memberId, intent.kind, t))) return;
+        await sendDevices(env, list, vapid);
       } catch (e) {
         console.error("deliver failed", e);
       }

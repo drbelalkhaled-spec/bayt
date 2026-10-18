@@ -3,10 +3,11 @@ import { add, clear, h } from "../lib/dom";
 import { compressImage, mediaUrl, pickImage, uploadMedia } from "../lib/media";
 import { onEvent } from "../lib/live";
 import { onOutboxChange, queuedEntries, queuedIds } from "../lib/outbox";
+import { takeFocus } from "../lib/router";
 import { isParent, session } from "../lib/session";
 import { kvGet, kvSet } from "../lib/store";
 import { undoToast } from "../lib/trash";
-import { confirmDialog, openSheet, timeAgo, toast } from "../lib/ui";
+import { confirmDialog, flashRow, openSheet, timeAgo, toast } from "../lib/ui";
 import "./views.css";
 import "./tasks.css";
 import {
@@ -38,6 +39,8 @@ let bodyEl: HTMLElement | null = null;
 let segEl: HTMLElement | null = null;
 let tick: ReturnType<typeof setInterval> | null = null;
 let gen = 0;
+/** The task a notification opened ("#/tasks/<id>"); shown once, after the first load. */
+let focusId: string | null = null;
 /** Task ids with a change still waiting in the offline outbox. */
 let waiting = new Set<string>();
 let unsubOutbox: (() => void) | null = null;
@@ -529,6 +532,22 @@ async function load(): Promise<void> {
   [open, done] = overlay(r.open, r.done);
   loaded = true;
   render();
+  showFocus();
+}
+
+/** Scroll to and flash the task a notification opened, unfolding whatever hides it. */
+function showFocus(): void {
+  const id = focusId;
+  focusId = null;
+  if (!id) return;
+  const t = open.find((x) => x.id === id) ?? done.find((x) => x.id === id);
+  if (t) {
+    if (!t.slot && t.due_on && t.due_on > addDaysStr(todayStr(), 1)) showUpcoming = true;
+    const g = t.slot ? "routine" : "tasks";
+    if (collapsedMap()[g]) setCollapsed(g, false);
+    render(true);
+  }
+  if (!flashRow(bodyEl, id)) toast("That task is not on the board");
 }
 
 function reconcile(): void {
@@ -859,6 +878,7 @@ export function mount(el: HTMLElement): () => void {
   sig = "";
   pending = 0;
   showUpcoming = false;
+  focusId = takeFocus("tasks");
   gen++;
   const parent = isParent();
   mine = !parent;

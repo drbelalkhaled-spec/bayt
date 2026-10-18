@@ -135,6 +135,25 @@ describe("members", () => {
     expect(me.json.members.map((m: any) => m.name)).toEqual(["Dad", "Mama"]);
   });
 
+  it("removing a member deletes their push devices and notices, not anyone else's", async () => {
+    const { dad, mom, nanny } = await makeHousehold();
+    const sub = (endpoint: string) => ({ endpoint, keys: { p256dh: "BPkey", auth: "authkey" } });
+    await api("/api/push/subscribe", { token: nanny.token, body: { subscription: sub("https://push.example.test/n1") } });
+    await api("/api/push/subscribe", { token: nanny.token, body: { subscription: sub("https://push.example.test/n2") } });
+    await api("/api/push/subscribe", { token: mom.token, body: { subscription: sub("https://push.example.test/m1") } });
+    const note = (id: string) =>
+      env.DB.prepare("INSERT INTO notices(id, member_id, kind, text, actor_name, at) VALUES (?1, ?2, 'chat', 'x', 'Dad', ?3)").bind(crypto.randomUUID(), id, Date.now());
+    await env.DB.batch([note(nanny.id), note(mom.id)]);
+    const count = async (table: string, id: string) =>
+      (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE member_id = ?1`).bind(id).first<{ n: number }>())!.n;
+    expect(await count("push_devices", nanny.id)).toBe(2);
+    expect((await api("/api/members/" + nanny.id, { token: dad.token, method: "DELETE" })).status).toBe(200);
+    expect(await count("push_devices", nanny.id)).toBe(0);
+    expect(await count("notices", nanny.id)).toBe(0);
+    expect(await count("push_devices", mom.id)).toBe(1);
+    expect(await count("notices", mom.id)).toBe(1);
+  });
+
   it("nanny cannot remove members", async () => {
     const { dad, nanny } = await makeHousehold();
     expect((await api("/api/members/" + dad.id, { token: nanny.token, method: "DELETE" })).status).toBe(403);

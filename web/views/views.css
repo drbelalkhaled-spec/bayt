@@ -25,6 +25,11 @@
   from { transform: scale(.96); opacity: .4; }
   to { transform: none; opacity: 1; }
 }
+/* The card or row a notification opened: lit for a moment, then back to normal (no end keyframe = no snap). */
+.flash-row { animation: flash-row 1.9s ease; }
+@keyframes flash-row {
+  0%, 55% { background-color: rgba(246, 226, 122, .22); box-shadow: 0 0 0 3px rgba(246, 226, 122, .55); }
+}
 
 .check {
   position: relative; z-index: 0; flex: 0 0 44px; inline-size: 44px; block-size: 44px; display: grid; place-items: center;
@@ -99,5 +104,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .item.pop { animation: none; }
+  .flash-row { animation: none; outline: 3px solid rgba(246, 226, 122, .55); }
   .backdrop, .sheet, .toast, .btn, .item { transition: none; }
 }

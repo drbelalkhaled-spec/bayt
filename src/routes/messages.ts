@@ -298,6 +298,7 @@ messages.post("/messages", async (c) => {
     to: results.map((r) => r.id),
     actorId: me.id,
     ...(text ? { text } : {}),
+    ref: `msg:${id}`,
   });
   return c.json({ message: shape(message) });
 });
@@ -387,7 +388,7 @@ messages.put("/messages/:id/reaction", async (c) => {
     c.executionCtx,
     "chat",
     emoji !== null && msg.author_id !== me.id
-      ? { kind: "chat", to: [msg.author_id], actorId: me.id, text: `${me.name} reacted ${emoji} to ${what}` }
+      ? { kind: "chat", to: [msg.author_id], actorId: me.id, text: `${me.name} reacted ${emoji} to ${what}`, ref: `msg:${id}` }
       : undefined,
   );
   return c.json({ ok: true, emoji });

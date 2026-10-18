@@ -169,12 +169,12 @@ items.post("/items", requireMember, async (c) => {
     .run();
   if (urgent) {
     const to = await urgentRecipients(c, me.id);
-    await emit(c.env, c.executionCtx, "list", { kind: "item_urgent", to, actorId: me.id, text: `${me.name}: ${name} is needed today` });
+    await emit(c.env, c.executionCtx, "list", { kind: "item_urgent", to, actorId: me.id, text: `${me.name}: ${name} is needed today`, ref: `item:${id}` });
   } else {
     const others = (
       await c.env.DB.prepare("SELECT id FROM members WHERE removed_at IS NULL AND id != ?1").bind(me.id).all<{ id: string }>()
     ).results.map((r) => r.id);
-    await emit(c.env, c.executionCtx, "list", { kind: "item", to: others, actorId: me.id, text: `${me.name} added ${name} to the list` });
+    await emit(c.env, c.executionCtx, "list", { kind: "item", to: others, actorId: me.id, text: `${me.name} added ${name} to the list`, ref: `item:${id}` });
   }
   return c.json({ item: await getItem(c, id) });
 });
@@ -252,7 +252,7 @@ items.patch("/items/:id", requireMember, async (c) => {
     c.executionCtx,
     "list",
     becameUrgent
-      ? { kind: "item_urgent", to: await urgentRecipients(c, me.id), actorId: me.id, text: `${me.name}: ${name ?? cur.name} is needed today` }
+      ? { kind: "item_urgent", to: await urgentRecipients(c, me.id), actorId: me.id, text: `${me.name}: ${name ?? cur.name} is needed today`, ref: `item:${id}` }
       : undefined,
   );
   return c.json({ item: await getItem(c, id) });

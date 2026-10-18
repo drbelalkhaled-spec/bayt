@@ -10,7 +10,7 @@ import { ROUTES, startRouter } from "./lib/router";
 import type { Route } from "./lib/router";
 import { clearSession, isParent, loadSession, session } from "./lib/session";
 import { kvGet, kvSet } from "./lib/store";
-import { resubscribePush } from "./push";
+import { disablePush, resubscribePush } from "./push";
 import { closeAllSheets } from "./lib/ui";
 import * as chatView from "./views/chat";
 import * as listView from "./views/list";
@@ -98,6 +98,9 @@ async function signOut(): Promise<void> {
   unmountView = null;
   activeRoute = null;
   closeAllSheets();
+  // This device stops getting this person's notifications (best effort, never holds up the sign-out for long).
+  const tk = getToken();
+  if (tk) await Promise.race([disablePush(tk), new Promise((r) => setTimeout(r, 2500))]).catch(() => undefined);
   await clearOutbox();
   await clearReadCache();
   void window.caches?.delete("bayt-media").catch(() => undefined);

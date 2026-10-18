@@ -199,8 +199,8 @@ tasks.post("/tasks", requireMember, requireParent, async (c) => {
   const push: PushIntent | undefined = !to.length
     ? undefined
     : urgent
-      ? { kind: "task_urgent", to, actorId: me.id, text: `Urgent from ${me.name}: ${b.title.trim()}` }
-      : { kind: "task_new", to, actorId: me.id };
+      ? { kind: "task_urgent", to, actorId: me.id, text: `Urgent from ${me.name}: ${b.title.trim()}`, ref: `task:${id}` }
+      : { kind: "task_new", to, actorId: me.id, ref: `task:${id}` };
   await emit(c.env, c.executionCtx, "tasks", push);
   if (remindAt !== null) reschedule(c);
   return c.json({ task: await getTask(c.env.DB, id) });
@@ -445,20 +445,20 @@ tasks.patch("/tasks/:id", requireMember, async (c) => {
   let push: PushIntent | undefined;
   if (becameDone) {
     const to = await activeIds(db, "parent", me.id);
-    if (to.length) push = { kind: "task_done", to, actorId: me.id };
+    if (to.length) push = { kind: "task_done", to, actorId: me.id, ref: `task:${id}` };
   } else if (blockReason !== null) {
     const to = await activeIds(db, "parent", me.id);
     const title = b.title !== undefined ? (b.title as string).trim() : row.title;
     if (to.length)
-      push = { kind: "task_blocked", to, actorId: me.id, text: `${me.name} couldn't do "${title}": ${blockReason}` };
+      push = { kind: "task_blocked", to, actorId: me.id, text: `${me.name} couldn't do "${title}": ${blockReason}`, ref: `task:${id}` };
   } else if (becameSeen) {
     const to = await activeIds(db, "parent", me.id);
-    if (to.length) push = { kind: "task_seen", to, actorId: me.id, text: `${me.name} will do "${row.title}"` };
+    if (to.length) push = { kind: "task_seen", to, actorId: me.id, text: `${me.name} will do "${row.title}"`, ref: `task:${id}` };
   } else if (becameUrgent) {
     const assignee = (b.assignee_id !== undefined ? b.assignee_id : row.assignee_id) as string | null;
     const to = assignee ? (assignee === me.id ? [] : [assignee]) : await activeIds(db, "nanny");
     const title = b.title !== undefined ? (b.title as string).trim() : row.title;
-    if (to.length) push = { kind: "task_urgent", to, actorId: me.id, text: `Urgent from ${me.name}: ${title}` };
+    if (to.length) push = { kind: "task_urgent", to, actorId: me.id, text: `Urgent from ${me.name}: ${title}`, ref: `task:${id}` };
   }
   await emit(c.env, c.executionCtx, "tasks", push);
   if (itemAdded) await emit(c.env, c.executionCtx, "list");
@@ -554,6 +554,7 @@ tasks.post("/tasks/:id/comments", requireMember, async (c) => {
     to,
     actorId: me.id,
     text: `${me.name} on "${task.title}": ${short}`,
+    ref: `task:${id}`,
   });
   return c.json({ comment: await db.prepare(COMMENT_SELECT + " WHERE c.id = ?1").bind(cid).first() });
 });

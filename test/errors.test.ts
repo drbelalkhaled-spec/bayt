@@ -21,7 +21,7 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const subscribe = (m: TestMember, endpoint = EP) =>
+const subscribe = (m: TestMember, endpoint = EP + "/" + m.id) =>
   api("/api/push/subscribe", { token: m.token, body: { subscription: { endpoint, keys: { p256dh: "a", auth: "b" } } } });
 const notice = async (m: TestMember) => (await api("/api/push/notice", { token: m.token })).json.notice;
 const rows = async () =>

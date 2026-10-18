@@ -93,8 +93,9 @@ self.addEventListener("activate", (e) =>
 );
 
 // ---------------------------------------------------------------- token
-// Dependency-free raw IndexedDB read of the auth token (DB "bayt", store "kv", key "token").
-function readToken(): Promise<string | null> {
+// Dependency-free raw IndexedDB access to the app's key/value store (DB "bayt", store "kv"): the auth
+// token ("token") and this device's notification cursor ("pushCursor"). Resolves null on any problem.
+function kv<T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest | void): Promise<T | null> {
   return new Promise((res) => {
     let r: IDBOpenDBRequest;
     try {
@@ -120,12 +121,13 @@ function readToken(): Promise<string | null> {
         return res(null);
       }
       try {
-        const g = db.transaction("kv", "readonly").objectStore("kv").get("token");
-        g.onsuccess = () => {
+        const t = db.transaction("kv", mode);
+        const q = run(t.objectStore("kv"));
+        t.oncomplete = () => {
           db.close();
-          res(typeof g.result === "string" && g.result ? g.result : null);
+          res(q ? (q.result as T) : null);
         };
-        g.onerror = () => {
+        t.onerror = t.onabort = () => {
           db.close();
           res(null);
         };
@@ -137,14 +139,37 @@ function readToken(): Promise<string | null> {
   });
 }
 
-// ---------------------------------------------------------------- push
-interface Notice {
-  title?: string;
-  text?: string;
-  kind?: string;
+async function readToken(): Promise<string | null> {
+  const v = await kv<unknown>("readonly", (s) => s.get("token"));
+  return typeof v === "string" && v ? v : null;
 }
 
-function routeFor(kind?: string): string {
+// ---------------------------------------------------------------- push
+// A push is only a knock. Every event is its own notice on the server; this device asks for the ones past its
+// cursor (GET /api/push/notices) and shows each under its own tag, so two quick pushes never overwrite each
+// other and an urgent task's sticky notification is not replaced by a chat message.
+interface Notice {
+  id: string;
+  kind: string;
+  text: string;
+  ref: string | null;
+  at: number;
+}
+
+const MAX_SHOWN = 4;
+const FIRST_WINDOW_MS = 10 * 60_000;
+/** Notices already displayed by this worker: concurrent push events fetch the same ones, and the repeat must stay silent. */
+const shown = new Set<string>();
+/** Newest notice time seen by this worker (the saved cursor can only be behind it); stops a late event moving the cursor back. */
+let cursorMem = 0;
+
+const ICON = "/icons/icon-192.png";
+const routeOf = (url: string): string => /#\/(\w+)/.exec(url)?.[1] ?? "";
+
+/** Where a tap goes: the exact task, message or item when the notice names one, else the tab. */
+function routeFor(kind?: string, ref?: string | null): string {
+  const m = /^(task|msg|item):([\w-]+)$/.exec(ref ?? "");
+  if (m) return `/#/${m[1] === "task" ? "tasks" : m[1] === "msg" ? "chat" : "list"}/${m[2]}`;
   switch (kind) {
     case "chat":
     case "msg_reminder":
@@ -164,50 +189,113 @@ function routeFor(kind?: string): string {
   }
 }
 
-self.addEventListener("push", (e) => {
-  e.waitUntil(
-    (async () => {
-      let notice: Notice | null = null;
-      try {
-        const token = await readToken();
-        if (token) {
-          const r = await fetch("/api/push/notice", { headers: { authorization: "Bearer " + token }, cache: "no-store" });
-          if (r.ok) notice = ((await r.json()) as { notice?: Notice }).notice ?? null;
-        }
-      } catch {
-        /* fall through to the generic notification */
-      }
+/** Routes ("chat", "tasks", "list") that a visible, focused window is showing right now. */
+async function routesOnScreen(): Promise<Set<string>> {
+  try {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    return new Set(wins.filter((c) => c.focused && c.visibilityState === "visible").map((c) => routeOf(c.url)));
+  } catch {
+    return new Set();
+  }
+}
 
-      const url = routeFor(notice?.kind);
+function showNotice(n: Notice, quiet: boolean): Promise<void> {
+  const urgent = n.kind === "task_urgent";
+  const again = shown.has(n.id);
+  if (shown.size > 200) shown.clear();
+  shown.add(n.id);
+  return self.registration.showNotification("Bayt", {
+    body: n.text,
+    icon: ICON,
+    badge: ICON,
+    tag: `${n.kind}:${n.ref ?? n.id}`,
+    // A repeat of one already on screen replaces it without buzzing (and without the browser's own "updated in the background").
+    renotify: !again,
+    // In a burst only the last one makes a sound; urgent tasks always do.
+    silent: quiet && !urgent ? true : undefined,
+    // Urgent tasks stay on screen until dismissed and buzz harder.
+    requireInteraction: urgent,
+    vibrate: urgent ? [300, 120, 300, 120, 300] : undefined,
+    data: { url: routeFor(n.kind, n.ref), id: n.id, at: n.at, kind: n.kind },
+  } as NotificationOptions);
+}
 
-      // Choice: if a visible, focused window is already showing the target route the
-      // user sees the change live, so the system notification is skipped. Chrome
-      // tolerates this when a client is focused. In every other case (including all
-      // failures) a notification is always shown, to honour userVisibleOnly.
-      if (notice) {
-        try {
-          const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-          const want = url.slice(2); // "#/chat"
-          if (wins.some((c) => c.focused && c.visibilityState === "visible" && new URL(c.url).hash === want)) return;
-        } catch {
-          /* ignore */
-        }
-      }
+const showGeneric = (): Promise<void> =>
+  self.registration.showNotification("Bayt", {
+    body: "Something changed at home",
+    icon: ICON,
+    badge: ICON,
+    tag: "bayt",
+    renotify: true,
+    data: { url: "/#/list" },
+  } as NotificationOptions);
 
-      await self.registration.showNotification(notice ? notice.title || "Bayt" : "Bayt", {
-        body: notice ? notice.text : "Something changed at home",
-        icon: "/icons/icon-192.png",
-        badge: "/icons/icon-192.png",
-        tag: notice?.kind || "bayt",
-        renotify: true,
-        // Urgent tasks stay on screen until dismissed and buzz harder.
-        requireInteraction: notice?.kind === "task_urgent",
-        vibrate: notice?.kind === "task_urgent" ? [300, 120, 300, 120, 300] : undefined,
-        data: { url },
-      } as NotificationOptions);
-    })(),
-  );
-});
+async function fetchNotices(token: string): Promise<Notice[] | null> {
+  try {
+    const saved = await kv<unknown>("readonly", (s) => s.get("pushCursor"));
+    const after = Math.max(cursorMem, typeof saved === "number" ? saved : 0) || Date.now() - FIRST_WINDOW_MS;
+    const r = await fetch("/api/push/notices?after=" + after, { headers: { authorization: "Bearer " + token }, cache: "no-store" });
+    return r.ok ? (((await r.json()) as { notices?: Notice[] }).notices ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function onPush(): Promise<void> {
+  const token = await readToken();
+  const list = token ? await fetchNotices(token) : null;
+  // Any failure: the generic notification, as the browser requires something visible.
+  if (!list) return showGeneric();
+
+  // If a visible, focused window is already showing a notice's tab the user sees the change live, so that
+  // notification is skipped. Chrome tolerates this when a client is focused.
+  const onScreen = await routesOnScreen();
+
+  if (!list.length) {
+    // Nothing new: another push event already showed it. Put the latest one back under the same tag, silently,
+    // so the browser has no reason to show its own "updated in the background".
+    if (onScreen.size) return;
+    const last = (await self.registration.getNotifications()).sort(
+      (a, b) => ((b.data as { at?: number } | null)?.at ?? 0) - ((a.data as { at?: number } | null)?.at ?? 0),
+    )[0] as (Notification & { badge?: string }) | undefined;
+    if (!last) return showGeneric();
+    return self.registration.showNotification(last.title, {
+      body: last.body,
+      icon: last.icon,
+      badge: last.badge,
+      tag: last.tag,
+      data: last.data,
+      requireInteraction: last.requireInteraction,
+      renotify: false,
+    } as NotificationOptions);
+  }
+
+  const todo = list.filter((n) => !onScreen.has(routeOf(routeFor(n.kind, n.ref))));
+  // Up to MAX_SHOWN get their own notification (urgent tasks first, then the newest); the rest become one summary.
+  const rank = (n: Notice): number => (n.kind === "task_urgent" ? 1e15 : 0) + n.at;
+  const own =
+    todo.length > MAX_SHOWN ? [...todo].sort((a, b) => rank(b) - rank(a)).slice(0, MAX_SHOWN).sort((a, b) => a.at - b.at) : todo;
+  const rest = todo.filter((n) => !own.includes(n));
+  for (const [i, n] of own.entries()) await showNotice(n, i < own.length - 1 || rest.length > 0);
+  if (rest.length) {
+    const newest = rest[rest.length - 1]!;
+    await self.registration.showNotification("Bayt", {
+      body: `${rest.length} more update${rest.length === 1 ? "" : "s"}`,
+      icon: ICON,
+      badge: ICON,
+      tag: "bayt-more",
+      renotify: true,
+      data: { url: routeFor(newest.kind), at: newest.at, kind: newest.kind },
+    } as NotificationOptions);
+  }
+  // Only after showing: if the worker dies half way, the rest are fetched again next time.
+  cursorMem = Math.max(cursorMem, ...list.map((n) => n.at));
+  await kv("readwrite", (s) => {
+    s.put(cursorMem, "pushCursor");
+  });
+}
+
+self.addEventListener("push", (e) => e.waitUntil(onPush()));
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
@@ -237,21 +325,24 @@ function b64uToU8(s: string): Uint8Array {
 }
 
 self.addEventListener("pushsubscriptionchange", (e) => {
-  (e as ExtendableEvent).waitUntil(
+  const ev = e as ExtendableEvent & { oldSubscription?: PushSubscription | null; newSubscription?: PushSubscription | null };
+  ev.waitUntil(
     (async () => {
       try {
         const token = await readToken();
         if (!token) return;
+        const headers = { "content-type": "application/json", authorization: "Bearer " + token };
         const { key } = (await (await fetch("/api/push/key")).json()) as { key: string };
-        const sub = await self.registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: b64uToU8(key) as BufferSource,
-        });
-        await fetch("/api/push/subscribe", {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: "Bearer " + token },
-          body: JSON.stringify({ subscription: sub.toJSON() }),
-        });
+        const sub =
+          ev.newSubscription ??
+          (await self.registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: b64uToU8(key) as BufferSource,
+          }));
+        await fetch("/api/push/subscribe", { method: "POST", headers, body: JSON.stringify({ subscription: sub.toJSON() }) });
+        // Only this device's old address goes; the person's other devices keep theirs.
+        const old = ev.oldSubscription?.endpoint;
+        if (old && old !== sub.endpoint) await fetch("/api/push/subscribe", { method: "DELETE", headers, body: JSON.stringify({ endpoint: old }) });
       } catch {
         /* best effort */
       }

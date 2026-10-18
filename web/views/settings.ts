@@ -210,16 +210,19 @@ async function invite(role: "parent" | "nanny", name: string, out: HTMLElement):
 
 async function notificationsRow(): Promise<HTMLElement> {
   let supported = false;
+  let onServer: boolean | null = null; // does the server know this very device? (null: could not ask)
   try {
     const push = await import("../push");
     supported = push.pushSupported();
+    const tk = getToken();
+    if (supported && tk) onServer = await push.deviceSubscribed(tk);
   } catch {
     supported = false;
   }
   if (!supported) {
     return h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, "Notifications"), h("div", { class: "sub" }, "Not supported on this device. Install the app to the home screen first.")));
   }
-  const enabled = (await kvGet<boolean>("pushOn")) === true && "Notification" in window && Notification.permission === "granted";
+  const enabled = "Notification" in window && Notification.permission === "granted" && (onServer ?? (await kvGet<boolean>("pushOn")) === true);
   const btn = h("button", { class: "btn small" + (enabled ? "" : " primary") }, enabled ? "Turn off" : "Turn on");
   btn.addEventListener("click", async () => {
     btn.disabled = true;

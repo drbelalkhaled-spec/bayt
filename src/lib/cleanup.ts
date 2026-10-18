@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { retention as errorsRetention } from "../routes/errors";
 import { retention as itemsRetention } from "../routes/items";
 import { retention as messagesRetention } from "../routes/messages";
+import { retention as pushRetention } from "../routes/push";
 import { retention as remindRetention } from "../routes/remind";
 import { retention as tasksRetention } from "../routes/tasks";
 import { retention as trashRetention } from "../routes/trash";
@@ -18,6 +19,7 @@ function statements(now: number): [string, ...unknown[]][] {
     ...messagesRetention(now),
     ...remindRetention(now),
     ...errorsRetention(now),
+    ...pushRetention(now),
     ...trashRetention(now),
   ];
 }
