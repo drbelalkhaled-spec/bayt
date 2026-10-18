@@ -188,6 +188,32 @@ describe("firing", () => {
     expect((await notice(nanny)).text).toBe('Reminder: "🎤 Voice note" — from Dad');
   });
 
+  it("names videos without a caption and locations instead of an empty quote", async () => {
+    await Promise.all([subscribe(mom, "mom"), subscribe(nanny, "nanny")]);
+    for (const [kind, who] of [["video", mom], ["location", nanny]] as const) {
+      const mid = crypto.randomUUID();
+      // The API stores a captionless video or a location with an empty body.
+      await env.DB.prepare("INSERT INTO messages(id, author_id, body, created_at, kind) VALUES (?1, ?2, '', ?3, ?4)")
+        .bind(mid, dad.id, Date.now(), kind)
+        .run();
+      await remindMe(who, mid, Date.now() + HOUR);
+    }
+    await sendDueMessageReminders(env, Date.now() + 2 * HOUR);
+    expect((await notice(mom)).text).toBe('Reminder: "🎬 Video" — from Dad');
+    expect((await notice(nanny)).text).toBe('Reminder: "📍 Location" — from Dad');
+  });
+
+  it("uses the caption for a captioned video", async () => {
+    const mid = crypto.randomUUID();
+    await env.DB.prepare("INSERT INTO messages(id, author_id, body, created_at, kind) VALUES (?1, ?2, 'the  game', ?3, 'video')")
+      .bind(mid, dad.id, Date.now())
+      .run();
+    await subscribe(mom, "mom");
+    await remindMe(mom, mid, Date.now() + HOUR);
+    await sendDueMessageReminders(env, Date.now() + 2 * HOUR);
+    expect((await notice(mom)).text).toBe('Reminder: "🎬 the game" — from Dad');
+  });
+
   it("skips (but marks sent) when the message is gone", async () => {
     const id = await say(dad, "Soon deleted");
     await subscribe(mom, "mom");

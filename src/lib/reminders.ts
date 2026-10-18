@@ -63,7 +63,17 @@ export async function sendDueMessageReminders(env: Env, t = now()): Promise<numb
     if (!claimed.meta.changes) continue;
     sent++;
     if (r.kind === null) continue; // the message is gone
-    const what = r.kind === "photo" ? "📷 Photo" : r.kind === "voice" ? "🎤 Voice note" : oneLine(r.body ?? "", 80);
+    const caption = oneLine(r.body ?? "", 80);
+    const what =
+      r.kind === "photo"
+        ? "📷 Photo"
+        : r.kind === "voice"
+          ? "🎤 Voice note"
+          : r.kind === "location"
+            ? "📍 Location"
+            : r.kind === "video"
+              ? `🎬 ${caption || "Video"}`
+              : caption;
     try {
       await deliver(env, {
         kind: "msg_reminder",
