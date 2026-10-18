@@ -259,3 +259,15 @@ html[data-style="simple"] .chip, html[data-style="simple"] .pill { color: var(--
 
 /* Text size (Settings -> Text size; per device): zoom the content, sheets and store mode; header and tab bar stay fixed. */
 .main, .sheet, .store-overlay { zoom: var(--text-scale, 1); }
+.offline-bar.retry { cursor: pointer; }
+.offline-bar.synced { color: var(--chalk-green); border-color: var(--chalk-green); }
+.install-bar {
+  flex-shrink: 0; display: flex; align-items: center; gap: 10px; margin: 0 2px 6px; padding: 6px 6px 6px 12px;
+  border-radius: var(--radius-sm); background: var(--board); border: 2px dashed var(--chalk-blue);
+  font: 700 18px/1.2 var(--font-hand); color: var(--chalk); text-shadow: var(--chalk-glow);
+}
+.install-bar .grow { flex: 1; min-inline-size: 0; }
+.install-bar .btn { flex-shrink: 0; }
+.install-ico { flex: 0 0 auto; font-size: 22px; }
+.install-x { flex: 0 0 44px; inline-size: 44px; block-size: 44px; display: grid; place-items: center; color: var(--chalk-dim); font-size: 18px; }
+html[data-style="simple"] .install-bar { font-size: 15px; }

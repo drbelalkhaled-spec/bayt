@@ -1,6 +1,6 @@
 import { ApiError, api, clearReadCache, clearToken, getToken, isOffline, loadToken, onNetworkChange, onUnauthorized } from "./lib/api";
-import { h } from "./lib/dom";
-import { initInstall } from "./lib/install";
+import { add, clear, h } from "./lib/dom";
+import { bannerDismissed, canInstall, dismissBanner, initInstall, isIOS, isStandalone, onInstallChange, promptInstall } from "./lib/install";
 import { initErrorReporting } from "./lib/report";
 import { applyTextStyle } from "./lib/textstyle";
 import { onEvent, onRemoved, startLive, stopLive } from "./lib/live";
@@ -34,6 +34,7 @@ let signingOut = false;
 let main: HTMLElement | null = null;
 let offlineBar: HTMLElement | null = null;
 let updateBar: HTMLElement | null = null;
+let installBar: HTMLElement | null = null;
 /** A downloaded new version waiting for the go-ahead (see the service worker block at the end). */
 let updateReady: ServiceWorker | null = null;
 let swReg: ServiceWorkerRegistration | null = null;
@@ -111,18 +112,81 @@ async function signOut(): Promise<void> {
   await boot();
 }
 
-/** Slim banner under the header: offline / changes waiting / syncing. Hidden when online with nothing queued. */
+/** Slim banner under the header: offline / changes waiting / syncing, then a short "all synced" or "back online" once that clears. */
+let wasBusy = false;
+let wasOff = false;
+let settledTimer: ReturnType<typeof setTimeout> | undefined;
 function paintOffline(): void {
   if (!offlineBar) return;
   const n = pendingCount();
   const off = isOffline();
+  const syncing = isSyncing();
   let text = "";
   if (off) text = "Offline — showing saved data" + (n ? ` · ${n} ${n === 1 ? "change" : "changes"} waiting` : "");
-  else if (isSyncing()) text = "Syncing…";
-  else if (n) text = `${n} ${n === 1 ? "change" : "changes"} waiting to sync`;
+  else if (syncing) text = n ? `Syncing ${n} ${n === 1 ? "change" : "changes"}…` : "Syncing…";
+  else if (n) text = `${n} ${n === 1 ? "change" : "changes"} waiting to sync · tap to retry`;
+  const settled = !text && (wasBusy || wasOff);
+  if (settled) {
+    text = wasBusy ? "All synced ✓" : "Back online ✓";
+    clearTimeout(settledTimer);
+    settledTimer = setTimeout(() => {
+      if (offlineBar?.classList.contains("synced")) offlineBar.hidden = true;
+    }, 2500);
+  } else if (text) clearTimeout(settledTimer);
+  wasBusy = !settled && (wasBusy || n > 0 || syncing);
+  wasOff = off;
+  if (!text && !offlineBar.classList.contains("synced")) offlineBar.hidden = true;
+  if (!text) return;
   offlineBar.textContent = text;
-  offlineBar.hidden = !text;
-  offlineBar.classList.toggle("syncing", !off && !!text);
+  offlineBar.hidden = false;
+  offlineBar.classList.toggle("syncing", !off && !settled);
+  offlineBar.classList.toggle("synced", settled);
+  offlineBar.classList.toggle("retry", !off && !syncing && n > 0);
+}
+
+/** One-time "Add Bayt to your home screen" banner; dismissing it is remembered on this device (Settings keeps the button). */
+function paintInstall(): void {
+  if (!installBar) return;
+  const ios = isIOS() && !isStandalone();
+  const show = !bannerDismissed() && (canInstall() || ios);
+  installBar.hidden = !show;
+  if (!show) return;
+  const close = h(
+    "button",
+    {
+      class: "install-x",
+      type: "button",
+      "aria-label": "Not now",
+      onclick: () => {
+        dismissBanner();
+        paintInstall();
+      },
+    },
+    "✕",
+  );
+  clear(installBar);
+  add(
+    installBar,
+    h("span", { class: "install-ico", "aria-hidden": "true" }, "📲"),
+    ios
+      ? h("span", { class: "grow" }, "Add Bayt to your home screen: tap Share, then “Add to Home Screen”. Needed for notifications.")
+      : h("span", { class: "grow" }, "Add Bayt to your home screen for quick access and notifications."),
+    ios
+      ? null
+      : h(
+          "button",
+          {
+            class: "btn small primary",
+            type: "button",
+            onclick: async () => {
+              await promptInstall();
+              paintInstall();
+            },
+          },
+          "Install",
+        ),
+    close,
+  );
 }
 
 function paintUpdate(): void {
@@ -239,7 +303,8 @@ function onLive(e: LiveEvent): void {
 
 function buildFrame(): void {
   main = h("main", { class: "main", id: "main" });
-  offlineBar = h("div", { class: "offline-bar", role: "status", "aria-live": "polite", hidden: true });
+  offlineBar = h("div", { class: "offline-bar", role: "status", "aria-live": "polite", hidden: true, onclick: () => void flushOutbox() });
+  installBar = h("div", { class: "install-bar", role: "region", "aria-label": "Install Bayt", hidden: true });
   updateBar = h("button", { class: "update-bar", type: "button", hidden: true, onclick: applyUpdate }, "✨ New version ready — tap to update");
   badges.clear();
   tabEls.clear();
@@ -268,6 +333,7 @@ function buildFrame(): void {
       ),
       updateBar,
       offlineBar,
+      installBar,
       main,
       h("nav", { class: "tabbar", "aria-label": "Sections" }, tabs),
     ),
@@ -275,6 +341,7 @@ function buildFrame(): void {
   paintBadges();
   paintOffline();
   paintUpdate();
+  paintInstall();
 }
 
 async function startApp(): Promise<void> {
@@ -324,6 +391,7 @@ async function syncTimezone(): Promise<void> {
 
 onNetworkChange(paintOffline);
 onOutboxChange(paintOffline);
+onInstallChange(paintInstall);
 onOutboxSynced(() => {
   if (activeRoute) void views[activeRoute].refresh().catch(() => undefined);
   recountOthers();
