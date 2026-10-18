@@ -13,3 +13,6 @@ android/local.properties
 android/signing/
 android/signing.properties
 releases/
+
+# Agent worktrees (Claude Code)
+.claude/worktrees/

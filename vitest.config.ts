@@ -14,6 +14,6 @@ export default defineConfig(async () => {
       }),
     ],
     // Some tests make dozens of requests; 5 s (the default) is too tight when the machine is busy.
-    test: { setupFiles: ["./test/setup.ts"], testTimeout: 15000 },
+    test: { setupFiles: ["./test/setup.ts"], testTimeout: 15000, include: ["test/**/*.test.ts"] },
   };
 });

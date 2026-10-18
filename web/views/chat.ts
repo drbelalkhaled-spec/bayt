@@ -1038,14 +1038,15 @@ async function sendVideo(caption: string): Promise<boolean> {
   try {
     const info = await readVideoMeta(file).catch(() => null);
     if (!info) throw new Error("video_unreadable");
-    if (info.durationMs > MAX_VIDEO_MS) {
+    // Phones label a clip "0:30" when it is 30.03 s long: allow half a second over, then report at most 30 s.
+    if (info.durationMs > MAX_VIDEO_MS + 500) {
       dropPending(id);
       toast("Videos can be up to 30 seconds", true);
       return false;
     }
     const up = await uploadMedia(type === file.type ? file : new Blob([file], { type }));
     const dims = info.w > 0 && info.h > 0 && info.w <= 20_000 && info.h <= 20_000 ? { w: info.w, h: info.h } : {};
-    await postMedia({ kind: "video", media_key: up.key, ...(caption ? { body: caption } : {}), media_meta: { durationMs: info.durationMs, ...dims } });
+    await postMedia({ kind: "video", media_key: up.key, ...(caption ? { body: caption } : {}), media_meta: { durationMs: Math.max(1, Math.min(MAX_VIDEO_MS, Math.round(info.durationMs))), ...dims } });
     dropPending(id);
     return true;
   } catch (e) {

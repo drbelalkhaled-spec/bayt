@@ -36,6 +36,7 @@ let offlineBar: HTMLElement | null = null;
 let updateBar: HTMLElement | null = null;
 /** A downloaded new version waiting for the go-ahead (see the service worker block at the end). */
 let updateReady: ServiceWorker | null = null;
+let swReg: ServiceWorkerRegistration | null = null;
 const tabEls = new Map<Route, HTMLElement>();
 
 // Tab badges: how many things others added or changed since this tab was last open.
@@ -128,10 +129,34 @@ function paintUpdate(): void {
   if (updateBar) updateBar.hidden = !updateReady;
 }
 
+const UPDATE_TRIED_KEY = "baytUpdateTried";
+/** True when this tab already reloaded for an update in the last 2 minutes (guards against a reload loop). */
+function updateTriedRecently(): boolean {
+  try {
+    return Date.now() - Number(sessionStorage.getItem(UPDATE_TRIED_KEY) || 0) < 120_000;
+  } catch {
+    return false;
+  }
+}
+
 function applyUpdate(): void {
-  if (!updateReady) return;
+  // Ask the newest waiting version: if two updates arrived while the app was open, the first one is
+  // already replaced and would ignore the message. The controllerchange handler reloads.
+  const w = swReg?.waiting ?? updateReady;
+  w?.postMessage({ type: "SKIP_WAITING" });
+  // The old version may still be finishing work and take a while to step aside. Reload once as a fallback;
+  // if that already happened, ask for a restart instead of reloading in a loop.
+  if (updateTriedRecently()) {
+    if (updateBar) updateBar.textContent = "Close and reopen Bayt to finish the update";
+    return;
+  }
   if (updateBar) updateBar.textContent = "Updating…";
-  updateReady.postMessage({ type: "SKIP_WAITING" }); // the controllerchange handler reloads
+  try {
+    sessionStorage.setItem(UPDATE_TRIED_KEY, String(Date.now()));
+  } catch {
+    /* storage blocked: the reload still happens once per visit */
+  }
+  setTimeout(() => location.reload(), 5000);
 }
 
 function paintBadges(): void {
@@ -327,10 +352,11 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
   navigator.serviceWorker
     .register("/sw.js")
     .then((reg) => {
+      swReg = reg;
       const ready = (w: ServiceWorker | null): void => {
         if (!w || !navigator.serviceWorker.controller) return; // first install: nothing to replace
         updateReady = w;
-        if (performance.now() < OPEN_GRACE_MS || !main) applyUpdate();
+        if ((performance.now() < OPEN_GRACE_MS || !main) && !updateTriedRecently()) applyUpdate();
         else paintUpdate();
       };
       const watch = (w: ServiceWorker | null): void => {
