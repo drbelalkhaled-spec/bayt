@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { requireMember, type AppEnv } from "../lib/auth";
+import { parsePrefs, readPrefs } from "../lib/prefs";
 import { readNotice, sendDevices, storeNotice, vapidPublicKey, type Device } from "../lib/push";
 import { fail, newId, now, readJson } from "../lib/util";
 
@@ -110,6 +111,22 @@ push.get("/push/notices", requireMember, async (c) => {
   return c.json({
     notices: results.map((r) => ({ id: r.id, kind: r.kind, text: r.text, actorName: r.actor_name, ref: r.ref, at: r.at })),
   });
+});
+
+/** My notification choices (the defaults until I change something). They apply to all of my devices. */
+push.get("/push/prefs", requireMember, async (c) => {
+  const row = await c.env.DB.prepare("SELECT notify_prefs FROM members WHERE id = ?1")
+    .bind(c.get("me").id)
+    .first<{ notify_prefs: string | null }>();
+  c.header("cache-control", "no-store");
+  return c.json({ prefs: readPrefs(row?.notify_prefs) });
+});
+
+push.put("/push/prefs", requireMember, async (c) => {
+  const prefs = parsePrefs((await readJson(c)).prefs);
+  if (!prefs) return fail(c, "bad_prefs", 400);
+  await c.env.DB.prepare("UPDATE members SET notify_prefs = ?1 WHERE id = ?2").bind(JSON.stringify(prefs), c.get("me").id).run();
+  return c.json({ prefs });
 });
 
 push.post("/push/test", requireMember, async (c) => {

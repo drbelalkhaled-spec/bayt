@@ -1,7 +1,9 @@
 import type { Env } from "../env";
 import { reportError } from "./errors";
 import type { PushIntent } from "./events";
-import { newId, now } from "./util";
+import { categoryOf, readPrefs, type NotifyPrefs } from "./prefs";
+import { inQuiet, timeIn } from "./recur";
+import { householdTz, newId, now } from "./util";
 
 /** Contact URI put in the VAPID JWT `sub` claim. CHANGE THIS to a real mailto:/https: contact before launch. */
 export const VAPID_SUBJECT = "https://bayt.dr-belal-khaled.workers.dev";
@@ -175,14 +177,21 @@ export async function deliver(env: Env, intent: PushIntent): Promise<void> {
   if (!ids.length) return;
   const ph = ids.map((_, i) => "?" + (i + 1)).join(",");
   const { results } = await env.DB.prepare(
-    `SELECT d.id, d.member_id, d.endpoint FROM push_devices d JOIN members m ON m.id = d.member_id
+    `SELECT d.id, d.member_id, d.endpoint, m.notify_prefs FROM push_devices d JOIN members m ON m.id = d.member_id
      WHERE d.member_id IN (${ph}) AND m.removed_at IS NULL`,
   )
     .bind(...ids)
-    .all<Device & { member_id: string }>();
-  if (!results.length) return;
+    .all<Device & { member_id: string; notify_prefs: string | null }>();
+  // Someone who switched this category off gets neither a notice nor a push.
+  const cat = categoryOf(intent.kind);
+  const prefs = new Map<string, NotifyPrefs>();
   const devices = new Map<string, Device[]>();
-  for (const d of results) devices.set(d.member_id, [...(devices.get(d.member_id) ?? []), { id: d.id, endpoint: d.endpoint }]);
+  for (const d of results) {
+    if (!prefs.has(d.member_id)) prefs.set(d.member_id, readPrefs(d.notify_prefs));
+    if (cat && !prefs.get(d.member_id)![cat]) continue;
+    devices.set(d.member_id, [...(devices.get(d.member_id) ?? []), { id: d.id, endpoint: d.endpoint }]);
+  }
+  if (!devices.size) return;
   const actor = await env.DB.prepare("SELECT name FROM members WHERE id = ?1")
     .bind(intent.actorId)
     .first<{ name: string }>();
@@ -191,10 +200,13 @@ export async function deliver(env: Env, intent: PushIntent): Promise<void> {
   const vapid = await ensureVapid(env);
   const t = now();
   const throttled = intent.kind === "item" || intent.kind === "shopping" || intent.kind === "chat" || intent.kind === "task_seen";
+  // Quiet hours (household time zone) keep the notice for the in-app badges but send no push; urgent kinds ignore them.
+  const clock = cat && [...devices.keys()].some((id) => prefs.get(id)!.quiet) ? timeIn(await householdTz(env), t) : null;
   await Promise.all(
     [...devices].map(async ([memberId, list]) => {
       try {
         await storeNotice(env, memberId, { kind: intent.kind, actorName, text, at: t, ref: intent.ref });
+        if (clock && inQuiet(prefs.get(memberId)!.quiet, clock)) return;
         if (throttled && !(await claim(env, memberId, intent.kind, t))) return;
         await sendDevices(env, list, vapid);
       } catch (e) {

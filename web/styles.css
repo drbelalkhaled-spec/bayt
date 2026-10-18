@@ -227,6 +227,10 @@ a { color: var(--chalk-blue); }
   accent-color: var(--chalk-yellow);
   flex: none;
 }
+/* Settings -> What to notify me about: the whole row is the switch; quiet hours reveal two time fields. */
+.row.check-row { cursor: pointer; }
+.quiet-times { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding-block: 10px 0; }
+.quiet-times .field { min-inline-size: 0; }
 
 /* ---------- "Simple" text style (Settings -> Text style; per device) ----------
    Same board and colors, but a plain system sans-serif and brighter secondary text. The handwriting

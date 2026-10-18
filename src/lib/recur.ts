@@ -111,6 +111,24 @@ export function todayIn(tz: string, at = Date.now()): string {
   return `${w.y}-${String(w.mo).padStart(2, "0")}-${String(w.d).padStart(2, "0")}`;
 }
 
+/** Wall-clock time 'HH:MM' in tz at instant `at` (default now). */
+export function timeIn(tz: string, at = Date.now()): string {
+  const w = wallParts(at, tz);
+  return `${String(w.h).padStart(2, "0")}:${String(w.mi).padStart(2, "0")}`;
+}
+
+/** Quiet hours: from is inclusive, to is exclusive, and a range with from > to wraps past midnight (22:00-07:00). */
+export interface Quiet {
+  from: string;
+  to: string;
+}
+
+/** Is wall-clock `hhmm` inside the quiet range? No range, or from === to, is never quiet. */
+export function inQuiet(quiet: Quiet | null, hhmm: string): boolean {
+  if (!quiet || quiet.from === quiet.to) return false;
+  return quiet.from < quiet.to ? hhmm >= quiet.from && hhmm < quiet.to : hhmm >= quiet.from || hhmm < quiet.to;
+}
+
 /** Epoch ms of wall-clock `date time` in tz. DST-safe: iterates the offset until it is stable. */
 export function zonedToEpoch(date: string, time: string, tz: string): number {
   const [hh, mm] = time.split(":").map(Number) as [number, number];
