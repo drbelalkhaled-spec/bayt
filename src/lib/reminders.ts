@@ -44,6 +44,7 @@ export async function scheduleReminders(env: Env): Promise<void> {
 interface DueMessageRow {
   id: string;
   member_id: string;
+  message_id: string;
   body: string | null;
   kind: string | null;
   author_name: string | null;
@@ -57,7 +58,7 @@ const oneLine = (s: string, max: number): string => s.replace(/\s+/g, " ").trim(
  */
 export async function sendDueMessageReminders(env: Env, t = now()): Promise<number> {
   const { results } = await env.DB.prepare(
-    `SELECT r.id, r.member_id, m.body, m.kind, a.name AS author_name
+    `SELECT r.id, r.member_id, r.message_id, m.body, m.kind, a.name AS author_name
      FROM message_reminders r LEFT JOIN messages m ON m.id = r.message_id LEFT JOIN members a ON a.id = m.author_id
      WHERE r.sent_at IS NULL AND r.remind_at <= ?1 ORDER BY r.remind_at LIMIT ${BATCH}`,
   )
@@ -88,6 +89,7 @@ export async function sendDueMessageReminders(env: Env, t = now()): Promise<numb
         to: [r.member_id],
         actorId: "system",
         text: `Reminder: "${what}" — from ${r.author_name || "Someone"}`,
+        ref: `msg:${r.message_id}`,
       });
     } catch (e) {
       await reportError(env, "reminders", e);
@@ -136,7 +138,7 @@ export async function sendDueReminders(env: Env, t = now()): Promise<number> {
     // deliver() never notifies the actor; a self-assigned reminder must still reach its creator.
     const actorId = to.includes(r.created_by) ? "system" : r.created_by;
     try {
-      await deliver(env, { kind: "reminder", to, actorId, text: `Reminder: ${r.title} at ${r.due_time ?? ""}`.trim() });
+      await deliver(env, { kind: "reminder", to, actorId, text: `Reminder: ${r.title} at ${r.due_time ?? ""}`.trim(), ref: `task:${r.id}` });
     } catch (e) {
       await reportError(env, "reminders", e);
     }

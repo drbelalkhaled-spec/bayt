@@ -27,7 +27,7 @@ const waitFor = async (cond: () => boolean | Promise<boolean>, ms = 3000) => {
   throw new Error("timeout");
 };
 const subscribe = (m: TestMember) =>
-  api("/api/push/subscribe", { token: m.token, body: { subscription: { endpoint: EP, keys: { p256dh: "a", auth: "b" } } } });
+  api("/api/push/subscribe", { token: m.token, body: { subscription: { endpoint: EP + "/" + m.id, keys: { p256dh: "a", auth: "b" } } } });
 const notice = async (m: TestMember) => (await api("/api/push/notice", { token: m.token })).json.notice;
 const newTask = async (body: Record<string, unknown>) => (await api("/api/tasks", { token: dad.token, body })).json.task;
 const patch = (m: TestMember, id: string, body: unknown) => api(`/api/tasks/${id}`, { method: "PATCH", token: m.token, body });

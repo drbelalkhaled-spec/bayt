@@ -187,12 +187,15 @@ auth.put("/household", requireMember, requireParent, async (c) => {
 auth.delete("/members/:id", requireMember, requireParent, async (c) => {
   const id = c.req.param("id");
   if (id === c.get("me").id) return fail(c, "cannot_remove_self", 400);
-  const r = await c.env.DB.prepare(
-    "UPDATE members SET removed_at = ?1, push_sub = NULL WHERE id = ?2 AND removed_at IS NULL",
-  )
+  // push_sub is the pre-0012 single subscription; it is only cleared here, never read.
+  const r = await c.env.DB.prepare("UPDATE members SET removed_at = ?1, push_sub = NULL WHERE id = ?2 AND removed_at IS NULL")
     .bind(now(), id)
     .run();
   if (!r.meta.changes) return fail(c, "not_found", 404);
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM push_devices WHERE member_id = ?1").bind(id),
+    c.env.DB.prepare("DELETE FROM notices WHERE member_id = ?1").bind(id),
+  ]);
   await kick(c.env, c.executionCtx, id);
   await emit(c.env, c.executionCtx, "members");
   return c.json({ ok: true });

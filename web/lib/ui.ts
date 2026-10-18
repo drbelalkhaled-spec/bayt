@@ -122,3 +122,13 @@ export function timeAgo(t: number | string | Date): string {
   if (s < 7 * 86400) return `${Math.round(s / 86400)} d ago`;
   return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
+
+/** Scrolls the card or row marked data-id into view and flashes it (see .flash-row). False when it is not on screen. */
+export function flashRow(root: HTMLElement | null, id: string): boolean {
+  const el = root?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+  if (!el) return false;
+  el.scrollIntoView({ block: "center" });
+  el.classList.add("flash-row");
+  setTimeout(() => el.classList.remove("flash-row"), 2000);
+  return true;
+}

@@ -2,9 +2,10 @@ import { ApiError, api, isOffline, isQueued } from "../lib/api";
 import { add, clear, h } from "../lib/dom";
 import { compressImage, mediaUrl, pickImage, uploadMedia } from "../lib/media";
 import { onOutboxChange, queuedEntries, queuedIds } from "../lib/outbox";
+import { takeFocus } from "../lib/router";
 import { session } from "../lib/session";
 import { undoToast } from "../lib/trash";
-import { confirmDialog, openSheet, timeAgo, toast } from "../lib/ui";
+import { confirmDialog, flashRow, openSheet, timeAgo, toast } from "../lib/ui";
 import { type StoreMode, openStoreMode } from "./store-mode";
 import "./views.css";
 import "./list.css";
@@ -52,6 +53,8 @@ let shopping: Shopping | null = null;
 let sig = "";
 let pending = 0;
 let needRefresh = false;
+/** The item a notification opened ("#/list/<id>"); shown once, after the first load. */
+let focusId: string | null = null;
 let listEl: HTMLElement | null = null;
 let bannerEl: HTMLElement | null = null;
 let chipsEl: HTMLElement | null = null;
@@ -314,6 +317,11 @@ async function load(): Promise<void> {
   if (!root || pending) return;
   applyResponse(r);
   render();
+  if (focusId) {
+    const id = focusId;
+    focusId = null;
+    if (!flashRow(listEl, id)) toast("That item is no longer on the list");
+  }
 }
 
 async function stopShopping(): Promise<void> {
@@ -593,6 +601,7 @@ export function mount(el: HTMLElement): () => void {
   sig = "";
   pending = 0;
   needRefresh = false;
+  focusId = takeFocus("list");
   let pendingPhoto: string | null = null;
   let uploading = false;
 

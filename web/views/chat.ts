@@ -3,6 +3,7 @@ import { add, clear, h } from "../lib/dom";
 import { onEvent, sendTyping } from "../lib/live";
 import { MAX_VIDEO_BYTES, MAX_VIDEO_MS, compressImage, pickImage, pickVideo, readVideoMeta, recordVoice, uploadMedia, videoType, voiceSupported, type VoiceRecording } from "../lib/media";
 import { onOutboxChange, queuedEntries, queuedIds } from "../lib/outbox";
+import { takeFocus } from "../lib/router";
 import { isParent, memberName, session } from "../lib/session";
 import { undoToast } from "../lib/trash";
 import { confirmDialog, openSheet, toast, type Sheet } from "../lib/ui";
@@ -492,6 +493,8 @@ async function loadInitial(): Promise<void> {
   render();
   toBottom();
   scheduleRead();
+  const focus = takeFocus("chat"); // a notification tap ("#/chat/<id>"): show that message instead of the bottom
+  if (focus) void jumpTo(focus);
 }
 
 async function loadOlder(): Promise<void> {

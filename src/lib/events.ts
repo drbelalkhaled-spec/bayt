@@ -9,6 +9,8 @@ export interface PushIntent {
   actorId: string;
   /** Optional notice text; a default is built from kind + actor name when absent. */
   text?: string;
+  /** The one thing this is about, so a tap on the notification opens it. */
+  ref?: `task:${string}` | `msg:${string}` | `item:${string}`;
 }
 
 function doPost(env: Env, path: string, body: unknown): Promise<unknown> {

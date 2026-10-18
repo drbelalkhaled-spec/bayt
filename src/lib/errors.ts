@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { claim, ensureVapid, sendPush, storeNotice } from "./push";
+import { claim, ensureVapid, pushMember, storeNotice } from "./push";
 import { newId, now } from "./util";
 
 /** At most one problem alert per parent per hour, however many errors happen. */
@@ -43,16 +43,17 @@ export async function reportError(
       ).bind(MAX_ROWS),
     ]);
     const { results } = await env.DB.prepare(
-      `SELECT id, push_sub FROM members
-       WHERE role = 'parent' AND error_alerts = 1 AND removed_at IS NULL AND push_sub IS NOT NULL`,
-    ).all<{ id: string; push_sub: string }>();
+      `SELECT id FROM members
+       WHERE role = 'parent' AND error_alerts = 1 AND removed_at IS NULL
+         AND EXISTS (SELECT 1 FROM push_devices WHERE member_id = members.id)`,
+    ).all<{ id: string }>();
     if (!results.length) return;
     const vapid = await ensureVapid(env);
     const text = `Bayt had a problem (${where}): ${message}`.slice(0, 180);
     for (const m of results) {
       if (!(await claim(env, m.id, "error", t, ALERT_EVERY_MS))) continue;
       await storeNotice(env, m.id, { kind: "error", actorName: "Bayt", text, at: t });
-      await sendPush(env, m, vapid, false); // false: a failing alert must not report itself again
+      await pushMember(env, m.id, vapid, false); // false: a failing alert must not report itself again
     }
   } catch (e) {
     console.error("reportError failed", e);
