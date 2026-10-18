@@ -25,6 +25,9 @@ passwords, no ads, no tracking: you host it, your family's data stays in your Cl
 **Shopping list**
 - Anyone adds items; they are grouped by aisle automatically (Produce, Dairy & eggs, Meat & fish,
   Bakery, Pantry, Baby, Cleaning, …) and can be moved to another aisle by hand.
+- **"Needed today"**: flag an item as urgent and it moves into a red group at the top. A push goes
+  to whoever is out shopping right now, or to everyone else when nobody is.
+- **Edit** any item after adding it: name, quantity, note, aisle, photo or the urgent flag.
 - Ticking an item strikes it through and moves it to *Bought*, with **Undo**; bought items
   disappear from the list after 48 hours.
 - **"At the store" mode**: a full-screen, big-tick checklist that keeps the screen awake, and an
@@ -36,21 +39,42 @@ passwords, no ads, no tracking: you host it, your family's data stays in your Cl
 - Parents create and assign tasks; the helper sees what to do and ticks them off.
 - **Repeating tasks** (every day, every N days, chosen weekdays), **due time** with a push
   **reminder 15 minutes before**.
-- **Today's routine** checklist grouped into Morning / Afternoon / Evening.
+- **Today's routine** (grouped into Morning / Afternoon / Evening) and **Tasks** are two
+  collapsible sections, each with a badge for what is still pending; side by side on a wide screen.
+- **Routine rollover**: an unticked routine item moves to today after the household's midnight
+  (checked every hour), and that day's reminders fire again. Each missed day is recorded in
+  `task_misses`; parents can read them at `GET /api/tasks/misses`.
+- **"Will do"** before starting: the helper taps it, and the card shows who has claimed the task.
+- **Urgent tasks** go to the top, make a sound and buzz, and stay on screen until dismissed.
+- **Questions** on a task, so the back-and-forth stays with it.
+- **"Done today"** follows the household's time zone, on the server and on every phone.
 - Optional **photo when done**, and **"Can't do"** with a reason ("Out of supplies") that can add
   the missing item straight to the shopping list and notifies the parents.
 
 **Chat**
-- One family conversation with **photos** and **voice notes**, **"Seen by …"** receipts,
-  **pinned messages** (doctor's number, allergies), and long-press to turn any message into a
-  task or a shopping item.
+- One family conversation with **photos**, **voice notes**, **video clips** (up to 30 seconds) and
+  **shared locations**, plus **"Seen by …"** receipts, **pinned messages** (doctor's number,
+  allergies), and long-press to turn any message into a task or a shopping item.
+- **Reply** to a message (quoted above yours), one **emoji reaction** per person, **search** the
+  messages, and **edit** your own text message for 15 minutes after sending.
+- **"Remind me"** on any message: a personal reminder, sent only to the person who set it.
 
 **Everywhere**
 - Live sync between phones (WebSockets through a Durable Object), web push notifications.
+- **Notifications** reach every phone or tablet a person uses. Two quick events show as two
+  notifications, and tapping one opens the exact task, message or item.
+- **Notification preferences**: switch chat, tasks and shopping notifications on or off, and set
+  **quiet hours** in the household time zone. Urgent tasks, "needed today" items and reminders
+  always come through.
 - **Works offline**: the last data stays readable and new items, ticks and messages are queued
-  and sent when the connection returns.
-- Installable from Chrome (Android) or Safari (iPhone); an optional Android APK wrapper is
-  included.
+  and sent when the connection returns. A slim bar shows what is waiting ("tap to retry") and
+  confirms **All synced ✓** or **Back online ✓**.
+- **24-hour trash**: deleted items, tasks and messages can be restored for a day (tasks by
+  parents, messages by their author).
+- Installable from Chrome (Android) or Safari (iPhone), with a one-time **"Add Bayt to your home
+  screen"** banner: an Install button on Android and desktop, or Share → Add to Home Screen on
+  iPhone and iPad. An optional Android APK wrapper is included.
+- **App problems log** for parents in Settings, with optional alerts (at most one an hour).
 - Respectful by design: invites carry the person's name, so nobody is labelled by a role, and
   helpers can't rename themselves.
 
@@ -106,6 +130,9 @@ You need a free Cloudflare account and `npx wrangler login`.
    code and your name, install the app from the browser menu, and turn on notifications in
    ⚙️ Settings. Invite the others from **Settings → Invite someone**.
 
+The Worker has two cron triggers (set in `wrangler.jsonc`): a daily cleanup at 03:17 UTC, and an
+hourly check that rolls unticked routine items over to today.
+
 > On Windows PowerShell, if `npx` is blocked by the execution policy, use `npx.cmd` instead.
 
 ### Continuous deployment (optional)
@@ -133,7 +160,8 @@ site for full-screen verification, and change the package name and fingerprint i
 ## Project layout
 
 ```
-src/            Worker: routes (auth, items, tasks, messages, media, push, live), Durable Object, libs
+src/            Worker: routes (auth, items, tasks, messages, media, push, remind, trash, errors, live),
+                Durable Object, libs
 web/            PWA client: views (list, tasks, chat, settings), service worker, offline outbox
 migrations/     D1 schema
 test/           Vitest suites (run with npm test)
