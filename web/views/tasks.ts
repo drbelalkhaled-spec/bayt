@@ -140,19 +140,20 @@ function render(force = false): void {
   const current = regular.filter((t) => !(t.due_on && t.due_on > tomorrow));
   const doneRegular = done.filter((t) => !t.slot);
 
-  if (routineOpen.length || routineDone.length) add(bodyEl, routineSection(routineOpen, routineDone));
+  const hasRoutine = routineOpen.length + routineDone.length > 0;
+  const hasTasks = current.length + upcoming.length + doneRegular.length > 0;
+  const both = hasRoutine && hasTasks;
 
+  const tasksBody: HTMLElement[] = [];
   if (!current.length) {
     const msg = !loaded ? "" : routineOpen.length ? "" : doneRegular.length || routineDone.length ? "All done for today \u{1F389}" : "No tasks right now";
-    if (msg) add(bodyEl, h("div", { class: "empty" }, msg));
+    if (msg) tasksBody.push(h("div", { class: "empty" }, msg));
   } else {
-    if (routineOpen.length || routineDone.length) add(bodyEl, h("h2", { class: "section-h" }, "Tasks"));
-    add(bodyEl, h("div", { class: "stack" }, current.map(openCard)));
+    tasksBody.push(h("div", { class: "stack" }, current.map(openCard)));
   }
 
   if (upcoming.length) {
-    add(
-      bodyEl,
+    tasksBody.push(
       h(
         "button",
         {
@@ -168,14 +169,80 @@ function render(force = false): void {
         ` Upcoming (${upcoming.length})`,
       ),
     );
-    if (showUpcoming) add(bodyEl, h("div", { class: "stack upcoming" }, upcoming.map(openCard)));
+    if (showUpcoming) tasksBody.push(h("div", { class: "stack upcoming" }, upcoming.map(openCard)));
   }
 
-  if (doneRegular.length) add(bodyEl, h("h2", { class: "section-h" }, "Done today"), h("div", { class: "stack" }, doneRegular.map(doneCard)));
+  if (doneRegular.length) tasksBody.push(h("h2", { class: "section-h" }, "Done today"), h("div", { class: "stack" }, doneRegular.map(doneCard)));
+
+  const wrap = h("div", { class: "task-groups" + (both ? " two" : "") });
+  if (hasRoutine) {
+    const sec = routineSection(routineOpen, routineDone, both);
+    add(wrap, both ? group("routine", "Today's routine", routineOpen.length, routineDone.length > 0, sec) : sec);
+  }
+  if (hasTasks) add(wrap, both ? group("tasks", "Tasks", current.length, doneRegular.length > 0, h("div", { class: "group-tasks" }, tasksBody)) : tasksBody);
+  else add(wrap, tasksBody);
+  add(bodyEl, wrap);
 }
 
-function routineSection(todo: Task[], finished: Task[]): HTMLElement {
-  const sec = h("section", { class: "routine", "aria-label": "Today's routine" }, h("h2", { class: "section-h" }, "Today's routine"));
+const COLLAPSED_KEY = "bayt.tasks.collapsed";
+
+function collapsedMap(): Record<string, boolean> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "{}");
+    return v && typeof v === "object" ? (v as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function setCollapsed(id: string, on: boolean): void {
+  const m = collapsedMap();
+  if (on) m[id] = true;
+  else delete m[id];
+  try {
+    if (Object.keys(m).length) localStorage.setItem(COLLAPSED_KEY, JSON.stringify(m));
+    else localStorage.removeItem(COLLAPSED_KEY);
+  } catch {
+    /* storage blocked: still applies for this visit */
+  }
+}
+
+/** A collapsible group: header button with a pending-count badge, then the body (hidden while collapsed). */
+function group(id: string, label: string, pendingN: number, hasDone: boolean, bodyNode: HTMLElement): HTMLElement {
+  const collapsed = collapsedMap()[id] === true;
+  const bodyId = `task-group-${id}`;
+  bodyNode.id = bodyId;
+  bodyNode.hidden = collapsed;
+  const badge = pendingN
+    ? h("span", { class: "group-badge", "aria-label": `${pendingN} pending` }, String(pendingN))
+    : hasDone
+      ? h("span", { class: "group-badge all-done", "aria-label": "all done" }, "✓")
+      : null;
+  return h(
+    "div",
+    { class: "task-group group-" + id },
+    h(
+      "button",
+      {
+        class: "group-head",
+        type: "button",
+        "aria-expanded": String(!collapsed),
+        "aria-controls": bodyId,
+        onclick: () => {
+          setCollapsed(id, !collapsed);
+          render(true);
+        },
+      },
+      h("span", { class: "caret", "aria-hidden": "true" }, collapsed ? "▸" : "▾"),
+      h("span", { class: "group-label" }, label),
+      badge,
+    ),
+    bodyNode,
+  );
+}
+
+function routineSection(todo: Task[], finished: Task[], grouped = false): HTMLElement {
+  const sec = h("section", { class: "routine", "aria-label": "Today's routine" }, grouped ? null : h("h2", { class: "section-h" }, "Today's routine"));
   for (const s of SLOTS) {
     const rows = [
       ...todo.filter((t) => t.slot === s.id).map((t) => routineRow(t, false)),

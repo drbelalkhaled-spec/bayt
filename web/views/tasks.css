@@ -61,6 +61,27 @@
 .check.big::before { inset: 6px; border-width: 3px; }
 .check:disabled { opacity: .45; cursor: default; }
 
+/* ---------- routine / tasks groups ---------- */
+.task-groups.two { display: flex; flex-direction: column; gap: 12px; }
+.task-group > [hidden] { display: none; }
+.group-head {
+  display: flex; align-items: center; gap: 8px; inline-size: 100%; min-block-size: 44px; padding-inline: 4px; margin-block-end: 4px;
+  font: 700 24px/1.1 var(--font-hand); color: var(--chalk-blue); text-align: start;
+}
+.task-group.group-routine .group-head { color: var(--chalk-yellow); }
+.group-head .caret { display: inline-block; inline-size: 1em; }
+.group-badge {
+  display: inline-flex; align-items: center; justify-content: center; min-inline-size: 28px; block-size: 28px; padding-inline: 8px;
+  border-radius: 14px; background: var(--chalk-yellow); color: #1b1b1b; font: 700 18px/1 var(--font-hand);
+}
+.group-badge.all-done { background: transparent; border: 2px solid var(--chalk-line); color: var(--chalk-dim); }
+.group-tasks > .section-h:first-child { margin-block-start: 0; }
+/* side by side once the board itself is wide enough (the frame caps at 720px, so this is the board, not the window) */
+.tasks-body { container-type: inline-size; }
+@container (min-width: 600px) {
+  .task-groups.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+}
+
 /* ---------- upcoming ---------- */
 .upcoming-toggle {
   align-self: flex-start; min-block-size: 44px; padding-inline: 4px; font: 700 23px/1 var(--font-hand); color: var(--chalk-blue);
