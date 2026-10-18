@@ -1,12 +1,12 @@
 import { ApiError, api, isOffline, isQueued, onNetworkChange } from "../lib/api";
 import { add, clear, h } from "../lib/dom";
 import { onEvent, sendTyping } from "../lib/live";
-import { compressImage, pickImage, recordVoice, uploadMedia, voiceSupported, type VoiceRecording } from "../lib/media";
+import { MAX_VIDEO_BYTES, MAX_VIDEO_MS, compressImage, pickImage, pickVideo, readVideoMeta, recordVoice, uploadMedia, videoType, voiceSupported, type VoiceRecording } from "../lib/media";
 import { onOutboxChange, queuedEntries, queuedIds } from "../lib/outbox";
 import { isParent, memberName, session } from "../lib/session";
 import { undoToast } from "../lib/trash";
 import { confirmDialog, openSheet, toast, type Sheet } from "../lib/ui";
-import { closeViewer, fmtDur, pendingPhotoEl, pendingVoiceEl, photoEl, stopAllAudio, voiceEl } from "./chat-media";
+import { closeViewer, fmtDur, locationEl, pendingNoteEl, pendingPhotoEl, pendingVoiceEl, photoEl, stopAllAudio, videoEl, voiceEl } from "./chat-media";
 import "./views.css";
 import "./chat.css";
 import type { View } from "./types";
@@ -17,9 +17,9 @@ interface Msg {
   author_name: string;
   body: string;
   created_at: number;
-  kind: "text" | "photo" | "voice";
+  kind: "text" | "photo" | "voice" | "video" | "location";
   media_key: string | null;
-  media_meta: { w?: number; h?: number; durationMs?: number } | null;
+  media_meta: { w?: number; h?: number; durationMs?: number; lat?: number; lng?: number; acc?: number } | null;
   pinned_at: number | null;
   /** Set when the author changed the text after sending. */
   edited_at?: number | null;
@@ -60,7 +60,7 @@ interface Page {
 }
 interface Pending {
   id: string;
-  kind: "photo" | "voice";
+  kind: "photo" | "voice" | "video" | "location";
   preview?: string;
 }
 
@@ -146,6 +146,8 @@ const dayKey = (ms: number): string => {
 function preview(m: Msg): string {
   if (m.kind === "photo") return "\u{1F4F7} " + (m.body || "Photo");
   if (m.kind === "voice") return "\u{1F3A4} Voice note";
+  if (m.kind === "video") return "\u{1F3A5} " + (m.body || "Video");
+  if (m.kind === "location") return "\u{1F4CD} Location";
   return m.body;
 }
 
@@ -216,7 +218,7 @@ function seenText(): { id: string; text: string } | null {
 function mediaFor(m: Msg): HTMLElement {
   let el = mediaEls.get(m.id);
   if (!el) {
-    el = m.kind === "photo" ? photoEl(m) : voiceEl(m);
+    el = m.kind === "photo" ? photoEl(m) : m.kind === "video" ? videoEl(m) : m.kind === "location" ? locationEl(m) : voiceEl(m);
     mediaEls.set(m.id, el);
   }
   return el;
@@ -244,7 +246,7 @@ function render(): void {
     if (newDay) add(msgsEl, h("div", { class: "day-sep" }, h("span", null, dayLabel(m.created_at))));
     const start = newDay || !prev || prev.author_id !== m.author_id || m.created_at - prev.created_at > GROUP_MS;
     const mine = isMine(m);
-    const isMedia = m.kind === "photo" || m.kind === "voice";
+    const isMedia = m.kind !== "text";
     add(
       msgsEl,
       h(
@@ -271,11 +273,18 @@ function render(): void {
       h(
         "div",
         { class: "msg mine pending first" },
-        h("div", { class: "bubble media " + p.kind }, p.kind === "photo" ? pendingPhotoEl(p.preview ?? "") : pendingVoiceEl()),
+        h("div", { class: "bubble media " + p.kind }, pendingEl(p)),
       ),
     );
   }
   msgsEl.scrollTop = top;
+}
+
+function pendingEl(p: Pending): HTMLElement {
+  if (p.kind === "photo") return pendingPhotoEl(p.preview ?? "");
+  if (p.kind === "video") return pendingNoteEl("Sending video…");
+  if (p.kind === "location") return pendingNoteEl("Finding your location…");
+  return pendingVoiceEl();
 }
 
 function paintTyping(): void {
@@ -288,6 +297,8 @@ function refPreview(r: ReplyRef): string {
   if (r.deleted) return "Message deleted";
   if (r.kind === "photo") return "\u{1F4F7} " + (r.body || "Photo");
   if (r.kind === "voice") return "\u{1F3A4} Voice note";
+  if (r.kind === "video") return "\u{1F3A5} " + (r.body || "Video");
+  if (r.kind === "location") return "\u{1F4CD} Location";
   return r.body ?? "";
 }
 
@@ -1010,6 +1021,81 @@ async function sendPhoto(caption: string): Promise<boolean> {
   }
 }
 
+async function sendVideo(caption: string): Promise<boolean> {
+  const file = await pickVideo();
+  if (!file) return false;
+  const type = videoType(file);
+  if (!type) {
+    toast("That video format is not supported", true);
+    return false;
+  }
+  if (file.size > MAX_VIDEO_BYTES) {
+    toast("That video is too large", true);
+    return false;
+  }
+  const id = "c" + Math.random().toString(36).slice(2);
+  addPending({ id, kind: "video" });
+  try {
+    const info = await readVideoMeta(file).catch(() => null);
+    if (!info) throw new Error("video_unreadable");
+    if (info.durationMs > MAX_VIDEO_MS) {
+      dropPending(id);
+      toast("Videos can be up to 30 seconds", true);
+      return false;
+    }
+    const up = await uploadMedia(type === file.type ? file : new Blob([file], { type }));
+    const dims = info.w > 0 && info.h > 0 && info.w <= 20_000 && info.h <= 20_000 ? { w: info.w, h: info.h } : {};
+    await postMedia({ kind: "video", media_key: up.key, ...(caption ? { body: caption } : {}), media_meta: { durationMs: info.durationMs, ...dims } });
+    dropPending(id);
+    return true;
+  } catch (e) {
+    dropPending(id);
+    const c = e instanceof Error ? e.message : "";
+    toast(c === "too_large" ? "That video is too large" : c === "video_unreadable" ? "Could not read that video" : uploadErr(e), true);
+    return false;
+  }
+}
+
+/** One GPS fix, asked for only now (the browser shows its own permission prompt the first time). */
+function currentPosition(): Promise<GeolocationPosition> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error("unsupported"));
+    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 });
+  });
+}
+
+function geoErr(e: unknown): string {
+  const code = (e as Partial<GeolocationPositionError> | null)?.code;
+  if (code === 1) return "Location access was denied";
+  if (code === 3) return "Finding your location took too long";
+  if (e instanceof Error && e.message === "unsupported") return "Location is not available on this device";
+  return "Could not find your location";
+}
+
+async function sendLocation(): Promise<boolean> {
+  if (!(await confirmDialog("Send your current location to the family chat?", "Send"))) return false;
+  const id = "l" + Math.random().toString(36).slice(2);
+  addPending({ id, kind: "location" });
+  let pos: GeolocationPosition;
+  try {
+    pos = await currentPosition();
+  } catch (e) {
+    dropPending(id);
+    toast(geoErr(e), true);
+    return false;
+  }
+  try {
+    const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+    await postMedia({ kind: "location", media_meta: { lat, lng, ...(Number.isFinite(accuracy) ? { acc: Math.min(100_000, Math.round(accuracy)) } : {}) } });
+    dropPending(id);
+    return true;
+  } catch (e) {
+    dropPending(id);
+    toast(uploadErr(e), true);
+    return false;
+  }
+}
+
 async function sendVoice(blob: Blob, durationMs: number): Promise<void> {
   const id = "v" + Math.random().toString(36).slice(2);
   addPending({ id, kind: "voice" });
@@ -1127,7 +1213,7 @@ export function mount(el: HTMLElement): () => void {
   const searchBtn = h("button", { class: "btn small search-btn", type: "button", "aria-label": "Search messages", onclick: openSearch }, "\u{1F50D}");
   const sendBtn = h("button", { class: "btn primary send", type: "submit", disabled: true, "aria-label": "Send" }, "Send ➤");
   const micBtn = h("button", { class: "btn mic", type: "button", "aria-label": "Record voice note", hidden: true }, "\u{1F3A4}");
-  const camBtn = h("button", { class: "btn cam", type: "button", "aria-label": "Send a photo" }, "\u{1F4F7}");
+  const attachBtn = h("button", { class: "btn cam attach", type: "button", "aria-label": "Attach" }, "＋");
   let sending = false;
   let recording = false;
   const useMic = voiceSupported();
@@ -1137,9 +1223,9 @@ export function mount(el: HTMLElement): () => void {
     micBtn.hidden = !showMic;
     sendBtn.hidden = showMic;
     sendBtn.disabled = sending || empty;
-    camBtn.disabled = sending;
+    attachBtn.disabled = sending;
     const off = isOffline();
-    for (const [b, what] of [[camBtn, "Photos"], [micBtn, "Voice notes"]] as const) {
+    for (const [b, what] of [[attachBtn, "Photos, videos and locations"], [micBtn, "Voice notes"]] as const) {
       b.classList.toggle("off", off);
       b.setAttribute("aria-disabled", off ? "true" : "false");
       b.title = off ? `${what} need a connection` : "";
@@ -1162,15 +1248,15 @@ export function mount(el: HTMLElement): () => void {
       ta.focus();
     }
   };
-  camBtn.addEventListener("click", () => {
+  // Runs one attach job with the composer locked; the text box becomes the caption of a photo or video.
+  const attach = (job: (caption: string) => Promise<boolean>, usesCaption = true): void => {
     if (sending) return;
-    if (isOffline()) return void toast("You are offline · photos need a connection", true);
     const caption = ta.value.trim().slice(0, 2000);
     sending = true;
     sync();
-    void sendPhoto(caption)
+    void job(caption)
       .then((ok) => {
-        if (ok && caption) {
+        if (ok && usesCaption && caption) {
           ta.value = "";
           autoGrow(ta);
         }
@@ -1179,6 +1265,30 @@ export function mount(el: HTMLElement): () => void {
         sending = false;
         sync();
       });
+  };
+  attachBtn.addEventListener("click", () => {
+    if (sending) return;
+    if (isOffline()) return void toast("You are offline · photos, videos and locations need a connection", true);
+    const sheet = openSheet("Attach");
+    const opt = (label: string, run: () => void) =>
+      add(
+        sheet.body,
+        h(
+          "button",
+          {
+            class: "btn block attach-opt",
+            type: "button",
+            onclick: () => {
+              sheet.close();
+              run();
+            },
+          },
+          label,
+        ),
+      );
+    opt("\u{1F4F7} Photo", () => attach(sendPhoto));
+    opt("\u{1F3A5} Video (up to 30 s)", () => attach(sendVideo));
+    opt("\u{1F4CD} My location", () => attach(() => sendLocation(), false));
   });
   ta.addEventListener("input", () => {
     autoGrow(ta);
@@ -1200,7 +1310,7 @@ export function mount(el: HTMLElement): () => void {
         void doSend();
       },
     },
-    camBtn,
+    attachBtn,
     ta,
     micBtn,
     sendBtn,

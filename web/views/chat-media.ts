@@ -3,7 +3,7 @@ import { mediaUrl } from "../lib/media";
 
 export interface MediaMsg {
   media_key: string | null;
-  media_meta: { w?: number; h?: number; durationMs?: number } | null;
+  media_meta: { w?: number; h?: number; durationMs?: number; lat?: number; lng?: number; acc?: number } | null;
 }
 
 const PHOTO_MAX_W = 240;
@@ -182,4 +182,45 @@ export function pendingVoiceEl(): HTMLElement {
   const el = h("div", { class: "voice uploading" });
   add(el, h("span", { class: "spin", role: "progressbar", "aria-label": "Sending" }), h("span", { class: "vdur" }, "Sending voice note…"));
   return el;
+}
+
+// ---------- video clips ----------
+export function videoEl(m: MediaMsg): HTMLElement {
+  const v = h("video", { class: "clip", controls: true, playsInline: true, preload: "metadata", "aria-label": "Video" });
+  const w = m.media_meta?.w;
+  const hgt = m.media_meta?.h;
+  if (w && hgt) {
+    v.style.width = Math.min(PHOTO_MAX_W, w) + "px";
+    v.style.aspectRatio = `${w} / ${hgt}`;
+  }
+  // #t=0.001 makes iPhone Safari show the first frame instead of a black box.
+  v.src = mediaUrl(m.media_key ?? "") + "#t=0.001";
+  v.addEventListener("play", stopAllAudio);
+  return h("div", { class: "clip-wrap" }, v, h("span", { class: "vdur" }, "\u{1F3A5} " + fmtDur(m.media_meta?.durationMs ?? 0)));
+}
+
+/** Spinner plus a short status line, for uploads without a picture to show. */
+export function pendingNoteEl(text: string): HTMLElement {
+  const el = h("div", { class: "voice uploading" });
+  add(el, h("span", { class: "spin", role: "progressbar", "aria-label": "Sending" }), h("span", { class: "vdur" }, text));
+  return el;
+}
+
+// ---------- shared location ----------
+const accText = (acc: number): string => (acc < 1000 ? `within ${acc} m` : `within ${(acc / 1000).toFixed(1)} km`);
+
+export function locationEl(m: MediaMsg): HTMLElement {
+  const { lat, lng, acc } = m.media_meta ?? {};
+  if (typeof lat !== "number" || typeof lng !== "number") return h("div", { class: "loc-card" }, h("span", { class: "loc-title" }, "\u{1F4CD} Location"));
+  return h(
+    "div",
+    { class: "loc-card" },
+    h("span", { class: "loc-title" }, "\u{1F4CD} Location"),
+    typeof acc === "number" ? h("span", { class: "vdur" }, accText(acc)) : null,
+    h(
+      "a",
+      { class: "btn small loc-link", href: `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`, target: "_blank", rel: "noopener noreferrer" },
+      "Open in Maps",
+    ),
+  );
 }

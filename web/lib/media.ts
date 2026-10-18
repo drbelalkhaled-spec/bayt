@@ -6,13 +6,12 @@ export interface UploadedMedia {
   size: number;
 }
 
-/** Opens the camera/photo picker. Resolves null if cancelled. */
-export function pickImage(): Promise<File | null> {
+function pickFile(accept: string, capture?: string): Promise<File | null> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "image/*";
-    input.setAttribute("capture", "environment");
+    input.accept = accept;
+    if (capture) input.setAttribute("capture", capture);
     input.hidden = true;
     let done = false;
     const finish = (f: File | null): void => {
@@ -25,6 +24,48 @@ export function pickImage(): Promise<File | null> {
     input.addEventListener("cancel", () => finish(null));
     document.body.appendChild(input);
     input.click();
+  });
+}
+
+/** Opens the camera/photo picker. Resolves null if cancelled. */
+export const pickImage = (): Promise<File | null> => pickFile("image/*", "environment");
+
+/** Opens the video picker (camera or library). Resolves null if cancelled. */
+export const pickVideo = (): Promise<File | null> => pickFile("video/*");
+
+export const MAX_VIDEO_MS = 30_000;
+export const MAX_VIDEO_BYTES = 60 * 1024 * 1024;
+const VIDEO_TYPES: Record<string, string> = { mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", mov: "video/quicktime" };
+
+/** The upload content type the server accepts for this file, or null when the format is not supported. */
+export function videoType(file: File): string | null {
+  const t = file.type.split(";")[0]!.trim().toLowerCase();
+  if (t === "video/mp4" || t === "video/webm" || t === "video/quicktime") return t;
+  return VIDEO_TYPES[file.name.split(".").pop()?.toLowerCase() ?? ""] ?? null;
+}
+
+/** Reads length and picture size from a video file without playing it. Rejects when the browser cannot read it. */
+export function readVideoMeta(file: Blob): Promise<{ durationMs: number; w: number; h: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    v.muted = true;
+    const done = (fn: () => void): void => {
+      clearTimeout(timer);
+      v.removeAttribute("src");
+      v.load();
+      URL.revokeObjectURL(url);
+      fn();
+    };
+    const timer = setTimeout(() => done(() => reject(new Error("video_unreadable"))), 10_000);
+    v.addEventListener("loadedmetadata", () => {
+      const ms = Math.round(v.duration * 1000);
+      if (!Number.isFinite(ms) || ms < 1) return done(() => reject(new Error("video_unreadable")));
+      done(() => resolve({ durationMs: ms, w: v.videoWidth, h: v.videoHeight }));
+    });
+    v.addEventListener("error", () => done(() => reject(new Error("video_unreadable"))));
+    v.src = url;
   });
 }
 
@@ -67,7 +108,7 @@ export async function uploadMedia(blob: Blob): Promise<UploadedMedia> {
   return data;
 }
 
-/** URL usable in <img>/<audio> src (the token rides in ?t= because those elements cannot send headers). */
+/** URL usable in <img>/<audio>/<video> src (the token rides in ?t= because those elements cannot send headers). */
 export function mediaUrl(key: string): string {
   return `/api/media/${encodeURIComponent(key)}?t=${encodeURIComponent(getToken() ?? "")}`;
 }

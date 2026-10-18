@@ -190,29 +190,49 @@ messages.get("/messages/search", async (c) => {
   return c.json({ messages: results.map(shape) });
 });
 
-const META_KEYS: Record<"photo" | "voice", string[]> = { photo: ["w", "h"], voice: ["durationMs"] };
+const META_KEYS: Record<"photo" | "voice" | "video", string[]> = { photo: ["w", "h"], voice: ["durationMs"], video: ["durationMs", "w", "h"] };
+const MAX_VOICE_MS = 120_000;
+/** Video clips are limited to 30 seconds (the app refuses longer ones before uploading). */
+const MAX_VIDEO_MS = 30_000;
 
 /** Returns the cleaned meta object (or null when empty) or undefined when invalid. */
-function cleanMeta(kind: "photo" | "voice", raw: unknown): Record<string, number> | null | undefined {
-  if (raw === undefined || raw === null) return kind === "voice" ? undefined : null;
+function cleanMeta(kind: "photo" | "voice" | "video", raw: unknown): Record<string, number> | null | undefined {
+  if (raw === undefined || raw === null) return kind === "photo" ? null : undefined;
   if (typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const out: Record<string, number> = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (!META_KEYS[kind].includes(k)) return undefined;
     if (typeof v !== "number" || !Number.isInteger(v)) return undefined;
-    if (k === "durationMs" ? v < 1 || v > 120_000 : v < 1 || v > 20_000) return undefined;
+    if (k === "durationMs" ? v < 1 || v > (kind === "video" ? MAX_VIDEO_MS : MAX_VOICE_MS) : v < 1 || v > 20_000) return undefined;
     out[k] = v;
   }
-  if (kind === "voice" && out.durationMs === undefined) return undefined;
+  if (kind !== "photo" && out.durationMs === undefined) return undefined;
   if (JSON.stringify(out).length > 200) return undefined;
   return Object.keys(out).length ? out : null;
+}
+
+/** A shared position: lat/lng may be decimals (rounded to 6 places, about 10 cm); acc is an optional whole number of meters. */
+function cleanLocation(raw: unknown): Record<string, number> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  for (const k of Object.keys(o)) if (k !== "lat" && k !== "lng" && k !== "acc") return undefined;
+  const { lat, lng, acc } = o;
+  if (typeof lat !== "number" || !Number.isFinite(lat) || lat < -90 || lat > 90) return undefined;
+  if (typeof lng !== "number" || !Number.isFinite(lng) || lng < -180 || lng > 180) return undefined;
+  const round = (v: number) => Math.round(v * 1e6) / 1e6 || 0; // `|| 0` turns -0 into 0
+  const out: Record<string, number> = { lat: round(lat), lng: round(lng) };
+  if (acc !== undefined && acc !== null) {
+    if (typeof acc !== "number" || !Number.isInteger(acc) || acc < 0 || acc > 100_000) return undefined;
+    out.acc = acc;
+  }
+  return out;
 }
 
 messages.post("/messages", async (c) => {
   const b = await readJson(c);
   const me = c.get("me");
   const kind = b.kind === undefined || b.kind === null ? "text" : b.kind;
-  if (kind !== "text" && kind !== "photo" && kind !== "voice") return fail(c, "bad_kind", 400);
+  if (kind !== "text" && kind !== "photo" && kind !== "voice" && kind !== "video" && kind !== "location") return fail(c, "bad_kind", 400);
   if (b.body !== undefined && b.body !== null && typeof b.body !== "string") return fail(c, "bad_body", 400);
   const cid = clientId(b.id);
   if (cid === false) return fail(c, "bad_id", 400);
@@ -233,6 +253,12 @@ messages.post("/messages", async (c) => {
   let meta: Record<string, number> | null = null;
   if (kind === "text") {
     if (!body) return fail(c, "bad_body", 400);
+  } else if (kind === "location") {
+    if (body) return fail(c, "bad_body", 400);
+    if (b.media_key !== undefined && b.media_key !== null) return fail(c, "bad_media", 400);
+    const loc = cleanLocation(b.media_meta);
+    if (!loc) return fail(c, "bad_meta", 400);
+    meta = loc;
   } else {
     if (kind === "voice" && body) return fail(c, "bad_body", 400);
     if (typeof b.media_key !== "string" || !b.media_key || b.media_key.length > 64) return fail(c, "bad_media", 400);
@@ -242,7 +268,7 @@ messages.post("/messages", async (c) => {
     const row = await c.env.DB.prepare("SELECT content_type, attached FROM media WHERE key = ?1 AND owner_id = ?2")
       .bind(b.media_key, me.id)
       .first<{ content_type: string; attached: number }>();
-    const want = kind === "photo" ? "image/" : "audio/";
+    const want = kind === "photo" ? "image/" : kind === "video" ? "video/" : "audio/";
     if (!row || row.attached || !row.content_type.startsWith(want)) return fail(c, "bad_media", 400);
     if (!(await attachMedia(c.env, b.media_key, me.id))) return fail(c, "bad_media", 400);
     mediaKey = b.media_key;
@@ -257,7 +283,16 @@ messages.post("/messages", async (c) => {
   const { results } = await c.env.DB.prepare("SELECT id FROM members WHERE removed_at IS NULL AND id != ?1")
     .bind(me.id)
     .all<{ id: string }>();
-  const text = kind === "photo" ? `${me.name} sent a photo` : kind === "voice" ? `${me.name} sent a voice note` : undefined;
+  const text =
+    kind === "photo"
+      ? `${me.name} sent a photo`
+      : kind === "voice"
+        ? `${me.name} sent a voice note`
+        : kind === "video"
+          ? `${me.name} sent a video`
+          : kind === "location"
+            ? `${me.name} shared a location`
+            : undefined;
   await emit(c.env, c.executionCtx, "chat", {
     kind: "chat",
     to: results.map((r) => r.id),
@@ -337,7 +372,16 @@ messages.put("/messages/:id/reaction", async (c) => {
       .bind(id, me.id, emoji, now())
       .run();
   }
-  const what = msg.kind === "photo" ? "your photo" : msg.kind === "voice" ? "your voice note" : `"${msg.body.length > 60 ? msg.body.slice(0, 59) + "…" : msg.body}"`;
+  const what =
+    msg.kind === "photo"
+      ? "your photo"
+      : msg.kind === "voice"
+        ? "your voice note"
+        : msg.kind === "video"
+          ? "your video"
+          : msg.kind === "location"
+            ? "your location"
+            : `"${msg.body.length > 60 ? msg.body.slice(0, 59) + "…" : msg.body}"`;
   await emit(
     c.env,
     c.executionCtx,
@@ -361,7 +405,17 @@ messages.delete("/messages/:id", async (c) => {
   ).results;
   // Only the author sees it in their trash; the photo/voice note stays until the entry expires.
   const kind = String(row.kind ?? "text");
-  const label = kind === "photo" ? "📷 " + (String(row.body ?? "") || "Photo") : kind === "voice" ? "🎤 Voice note" : String(row.body ?? "");
+  const caption = String(row.body ?? "");
+  const label =
+    kind === "photo"
+      ? "📷 " + (caption || "Photo")
+      : kind === "voice"
+        ? "🎤 Voice note"
+        : kind === "video"
+          ? "🎥 " + (caption || "Video")
+          : kind === "location"
+            ? "📍 Location"
+            : caption;
   const trashId = newTrashId();
   await db.batch([
     trashStatement(db, { id: trashId, kind: "message", refId: id, label, data: { row, reactions }, mediaKey: (row.media_key as string | null) ?? null, by: me.id }),
