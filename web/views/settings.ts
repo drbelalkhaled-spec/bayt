@@ -128,8 +128,9 @@ export function openSettings(signOut: () => void): void {
         ),
       );
     }
+    add(body, ...(await notifyPrefsGroup()));
 
-    add(body, 
+    add(body,
       h(
         "div",
         { class: "actions" },
@@ -246,6 +247,121 @@ async function notificationsRow(): Promise<HTMLElement> {
     if (row) row.replaceWith(await notificationsRow());
   });
   return h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, "Notifications"), h("div", { class: "sub" }, enabled ? "On for this device" : "Get alerts for new messages and tasks")), btn);
+}
+
+interface NotifyPrefs {
+  chat: boolean;
+  tasks: boolean;
+  list: boolean;
+  quiet: { from: string; to: string } | null;
+}
+
+/** "What to notify me about": my choices follow me to every device and save the moment they change (reverted if saving fails). */
+async function notifyPrefsGroup(): Promise<HTMLElement[]> {
+  let prefs: NotifyPrefs;
+  try {
+    if (!(await import("../push")).pushSupported()) return [];
+    prefs = (await api<{ prefs: NotifyPrefs }>("/api/push/prefs")).prefs;
+  } catch {
+    return [];
+  }
+  let saved = prefs; // what the server has
+  let sending = false;
+  let again = false;
+  let lastQuiet = prefs.quiet ?? { from: "22:00", to: "07:00" };
+
+  const flush = async (): Promise<void> => {
+    if (sending) {
+      again = true; // a newer change is waiting: send it right after this one
+      return;
+    }
+    sending = true;
+    do {
+      again = false;
+      try {
+        saved = (await api<{ prefs: NotifyPrefs }>("/api/push/prefs", { method: "PUT", body: { prefs } })).prefs;
+      } catch {
+        prefs = saved;
+        again = false;
+        sync();
+        toast("Could not save your notification choices", true);
+      }
+    } while (again);
+    sending = false;
+  };
+  const update = (next: NotifyPrefs): void => {
+    prefs = next;
+    sync();
+    void flush();
+  };
+
+  const toggle = (key: "chat" | "tasks" | "list", title: string, sub: string) => {
+    const box = h("input", { type: "checkbox", role: "switch", "aria-label": title, onchange: () => update({ ...prefs, [key]: box.checked }) });
+    const row = h("label", { class: "row check-row" }, h("div", { class: "grow" }, h("div", { class: "title" }, title), h("div", { class: "sub" }, sub)), box);
+    return { box, row };
+  };
+  const chat = toggle("chat", "Chat messages", "New messages from the family");
+  const tasks = toggle("tasks", "Tasks", "New tasks, replies and updates");
+  const list = toggle("list", "Shopping list", "New items and shopping trips");
+
+  const quietBox = h("input", {
+    type: "checkbox",
+    role: "switch",
+    "aria-label": "Quiet hours",
+    onchange: () => update({ ...prefs, quiet: quietBox.checked ? lastQuiet : null }),
+  });
+  const quietRow = h("label", { class: "row check-row" }, h("div", { class: "grow" }, h("div", { class: "title" }, "Quiet hours"), h("div", { class: "sub" }, "Pause alerts at night. Updates still show in the app")), quietBox);
+  const timeField = (key: "from" | "to", label: string) => {
+    const input = h("input", {
+      class: "input dt",
+      type: "time",
+      onchange: () => {
+        const q = prefs.quiet;
+        if (!q) return;
+        if (!input.value || input.value === q[key]) {
+          input.value = q[key];
+          return;
+        }
+        const next = { ...q, [key]: input.value };
+        if (next.from === next.to) {
+          input.value = q[key];
+          toast("Pick two different times", true);
+          return;
+        }
+        lastQuiet = next;
+        update({ ...prefs, quiet: next });
+      },
+    });
+    return { input, el: h("label", { class: "field" }, h("span", null, label), input) };
+  };
+  const from = timeField("from", "From");
+  const to = timeField("to", "Until");
+  const times = h("div", { class: "stack" }, h("div", { class: "quiet-times" }, from.el, to.el), h("p", { class: "muted" }, "Times are in the household's time zone."));
+
+  function sync(): void {
+    chat.box.checked = prefs.chat;
+    tasks.box.checked = prefs.tasks;
+    list.box.checked = prefs.list;
+    quietBox.checked = !!prefs.quiet;
+    times.hidden = !prefs.quiet;
+    if (prefs.quiet) {
+      lastQuiet = prefs.quiet;
+      if (from.input.value !== prefs.quiet.from) from.input.value = prefs.quiet.from;
+      if (to.input.value !== prefs.quiet.to) to.input.value = prefs.quiet.to;
+    }
+  }
+  sync();
+
+  return [
+    h("h3", null, "What to notify me about"),
+    h("p", { class: "muted" }, "These choices apply to all your devices."),
+    chat.row,
+    tasks.row,
+    list.row,
+    quietRow,
+    times,
+    h("p", { class: "muted" }, "Urgent tasks, 'needed today' items and reminders always come through."),
+  ];
 }
 
 interface Problem {
