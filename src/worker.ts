@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "./env";
 import { cleanupMedia, runCleanup } from "./lib/cleanup";
 import { reportError } from "./lib/errors";
+import { rollRoutines } from "./lib/rollover";
 import auth from "./routes/auth";
 import errors from "./routes/errors";
 import items from "./routes/items";
@@ -39,12 +40,14 @@ app.onError((e, c) => {
 
 export default {
   fetch: app.fetch,
-  async scheduled(_c: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(
-      runCleanup(env)
-        .then(() => cleanupMedia(env))
-        .catch((e) => reportError(env, "daily cleanup", e)),
-    );
+  async scheduled(c: ScheduledController, env: Env, ctx: ExecutionContext) {
+    if (c.cron === "17 3 * * *")
+      ctx.waitUntil(
+        runCleanup(env)
+          .then(() => cleanupMedia(env))
+          .catch((e) => reportError(env, "daily cleanup", e)),
+      );
+    ctx.waitUntil(rollRoutines(env, ctx).catch((e) => reportError(env, "routine rollover", e)));
   },
 };
 

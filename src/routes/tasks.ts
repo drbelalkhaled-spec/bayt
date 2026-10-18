@@ -5,16 +5,17 @@ import { attachMedia, deleteMedia } from "../lib/media";
 import { newTrashId, trashStatement } from "../lib/trash";
 import {
   SLOTS,
+  addDays,
   nextDue,
   parseRecur,
   readRecur,
   todayIn,
   validDateStr,
   validTimeStr,
-  zonedToEpoch,
   type Recur,
 } from "../lib/recur";
-import { REMIND_BEFORE_MS, scheduleReminders } from "../lib/reminders";
+import { reminderTimes, scheduleReminders } from "../lib/reminders";
+import { rollRoutines } from "../lib/rollover";
 import { fail, householdTz, newId, now, readJson } from "../lib/util";
 
 const DAY = 86_400_000;
@@ -31,6 +32,7 @@ export function retention(t: number): [string, ...unknown[]][] {
   return [
     ["DELETE FROM tasks WHERE done_at IS NOT NULL AND done_at < ?1", t - 30 * DAY],
     ["DELETE FROM task_comments WHERE task_id NOT IN (SELECT id FROM tasks)"],
+    ["DELETE FROM task_misses WHERE created_at < ?1", t - 60 * DAY],
   ];
 }
 
@@ -103,13 +105,6 @@ async function activeIds(db: D1Database, role: "parent" | "nanny", exceptId?: st
 const getTask = async (db: D1Database, id: string) =>
   out(await db.prepare(SELECT + " WHERE t.id = ?1").bind(id).first());
 
-/** remind_at / reminded_at for a date+time: 15 min before; already-past due moments are marked reminded. */
-function reminder(due: string | null, time: string | null, tz: string, t: number): [number | null, number | null] {
-  if (!due || !time) return [null, null];
-  const at = zonedToEpoch(due, time, tz);
-  return [at - REMIND_BEFORE_MS, at <= t ? t : null];
-}
-
 /** True when the uploaded media exists, is an image and belongs to ownerId. */
 async function ownImage(db: D1Database, key: unknown, ownerId: string): Promise<boolean> {
   if (typeof key !== "string" || !key || key.length > 64) return false;
@@ -130,6 +125,11 @@ function reschedule(c: { env: AppEnv["Bindings"]; executionCtx: Pick<ExecutionCo
 
 tasks.get("/tasks", requireMember, async (c) => {
   const me = c.get("me");
+  try {
+    await rollRoutines(c.env, c.executionCtx);
+  } catch (e) {
+    console.error("rollover failed", e);
+  }
   const mine = c.req.query("mine") === "1";
   const filter = mine ? " AND (t.assignee_id = ?2 OR t.assignee_id IS NULL)" : "";
   const run = (sql: string, first: unknown) => {
@@ -147,6 +147,22 @@ tasks.get("/tasks", requireMember, async (c) => {
     now() - DAY,
   );
   return c.json({ open: open.results.map(out), done: done.results.map(out) });
+});
+
+// Registered before any /tasks/:id route so "misses" is never read as an id.
+tasks.get("/tasks/misses", requireMember, requireParent, async (c) => {
+  const raw = c.req.query("days");
+  if (raw !== undefined && (!/^\d+$/.test(raw) || Number(raw) < 1)) return fail(c, "bad_days", 400);
+  const days = Math.min(raw === undefined ? 7 : Number(raw), 60);
+  const since = addDays(todayIn(await householdTz(c.env)), -days);
+  const { results } = await c.env.DB.prepare(
+    `SELECT x.id, x.series_id, x.task_id, x.title, x.assignee_id, a.name AS assignee_name, x.slot, x.due_on, x.created_at
+     FROM task_misses x LEFT JOIN members a ON a.id = x.assignee_id
+     WHERE x.due_on >= ?1 ORDER BY x.due_on DESC, x.created_at DESC, x.id`,
+  )
+    .bind(since)
+    .all();
+  return c.json({ misses: results });
 });
 
 tasks.post("/tasks", requireMember, requireParent, async (c) => {
@@ -172,7 +188,7 @@ tasks.post("/tasks", requireMember, requireParent, async (c) => {
   const tz = recur || time ? await householdTz(c.env) : "UTC";
   if (recur && !due) due = todayIn(tz, t);
   if (time && !due) return fail(c, "bad_due_time", 400);
-  const [remindAt, remindedAt] = reminder(due, time, tz, t);
+  const [remindAt, remindedAt] = reminderTimes(due, time, tz, t);
   const id = newId();
   await c.env.DB.prepare(
     `INSERT INTO tasks(id, title, note, assignee_id, due_on, due_time, remind_at, reminded_at, recur, slot, series_id,
@@ -276,7 +292,7 @@ tasks.patch("/tasks/:id", requireMember, async (c) => {
   if (time !== row.due_time) set("due_time", time);
   let remindAt = row.remind_at;
   if (due !== row.due_on || time !== row.due_time) {
-    const [ra, rd] = reminder(due, time, tz, t);
+    const [ra, rd] = reminderTimes(due, time, tz, t);
     remindAt = ra;
     set("remind_at", ra);
     set("reminded_at", rd);
@@ -390,7 +406,7 @@ tasks.patch("/tasks/:id", requireMember, async (c) => {
     const series = row.series_id ?? row.id;
     const today = todayIn(tz, t);
     const nd = nextDue(recur, due > today ? due : today);
-    const [ra, rd] = reminder(nd, time, tz, t);
+    const [ra, rd] = reminderTimes(nd, time, tz, t);
     nextRemind = ra;
     const title = b.title !== undefined ? (b.title as string).trim() : row.title;
     const note = b.note !== undefined ? (b.note as string | null) || null : row.note;
