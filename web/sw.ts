@@ -38,7 +38,7 @@ registerRoute(
 
 // ---------------------------------------------------------------- runtime caches (offline)
 // Photos: keys are immutable, so cache-first. The auth token rides in ?t=, which is dropped from the
-// cache key (a re-login must not orphan the cache). Range requests (audio) are left to the network.
+// cache key (a re-login must not orphan the cache). Range requests (audio, video) are left to the network, and video responses are never stored.
 const MEDIA_CACHE = "bayt-media";
 const MEDIA_MAX = 200;
 async function trimMedia(): Promise<void> {
@@ -53,6 +53,9 @@ registerRoute(
     cacheName: MEDIA_CACHE,
     plugins: [
       {
+        // Videos are big and streamed with Range requests: never keep them in the photo cache.
+        cacheWillUpdate: async ({ response }) =>
+          response.status === 200 && !(response.headers.get("content-type") ?? "").toLowerCase().startsWith("video/") ? response : null,
         cacheKeyWillBeUsed: async ({ request }) => {
           const u = new URL(request.url);
           u.searchParams.delete("t");
