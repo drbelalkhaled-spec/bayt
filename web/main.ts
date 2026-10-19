@@ -11,7 +11,7 @@ import type { Route } from "./lib/router";
 import { clearSession, isParent, loadSession, session } from "./lib/session";
 import { kvGet, kvSet } from "./lib/store";
 import { disablePush, resubscribePush } from "./push";
-import { closeAllSheets } from "./lib/ui";
+import { closeAllSheets, toast } from "./lib/ui";
 import * as chatView from "./views/chat";
 import * as listView from "./views/list";
 import { showOnboarding } from "./views/onboarding";
@@ -206,6 +206,18 @@ function updateTriedRecently(): boolean {
   }
 }
 
+const JUST_UPDATED_KEY = "baytJustUpdated";
+/** After the reload that a new version triggers, say so once, so people know they are on it. */
+function noteUpdated(): void {
+  try {
+    const at = Number(sessionStorage.getItem(JUST_UPDATED_KEY) || 0);
+    sessionStorage.removeItem(JUST_UPDATED_KEY);
+    if (Date.now() - at < 60_000) toast("Bayt updated ✓", { ms: 4000 });
+  } catch {
+    /* storage blocked: no note */
+  }
+}
+
 function applyUpdate(): void {
   // Ask the newest waiting version: if two updates arrived while the app was open, the first one is
   // already replaced and would ignore the message. The controllerchange handler reloads.
@@ -350,6 +362,7 @@ function buildFrame(): void {
 async function startApp(): Promise<void> {
   for (const r of ROUTES) counts[r] = (await kvGet<number>(COUNT_KEY[r]).catch(() => 0)) || 0;
   buildFrame();
+  noteUpdated();
   unsub = onEvent(onLive);
   startRouter(showRoute);
   recountOthers();
@@ -417,6 +430,11 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (!hadController || reloading) return;
     reloading = true;
+    try {
+      sessionStorage.setItem(JUST_UPDATED_KEY, String(Date.now()));
+    } catch {
+      /* storage blocked: reload without the note */
+    }
     location.reload();
   });
   // A new version found right after opening is applied at once (nothing on screen to lose yet);
